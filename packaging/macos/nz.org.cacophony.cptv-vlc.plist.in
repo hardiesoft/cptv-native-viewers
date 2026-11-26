@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs once at login: puts the CPTV plugin dir on VLC's plugin path for every
+     app launched from Finder/Dock, so the normal VLC.app loads it. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>nz.org.cacophony.cptv-vlc</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/launchctl</string>
+		<string>setenv</string>
+		<string>VLC_PLUGIN_PATH</string>
+		<string>@PLUGIN_DIR@</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>

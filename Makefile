@@ -3,12 +3,18 @@
 #   make                 build the plugin
 #   make test            run Rust tests and a headless VLC smoke test
 #
-#   Linux, no root:
-#   make install-user    plugin in ~/.local, .cptv MIME type, and a "VLC (CPTV)"
+#   No root, VLC itself untouched:
+#   make install-user    Linux: plugin in ~/.local, .cptv MIME type, and a "VLC (CPTV)"
 #                        launcher set as the default app for .cptv files
+#                        macOS: plugin in ~/Library/Application Support, a login
+#                        LaunchAgent putting it on VLC's plugin path, and VLC set
+#                        as the default app for .cptv files
 #   Linux, system-wide / macOS:
 #   make install         copy plugin into VLC's own plugin dir (sudo on Linux)
 #   make associate       make VLC the default app for .cptv files
+#   macOS Quick Look (Finder thumbnails + spacebar preview):
+#   make install-quicklook   build "CPTV Quick Look.app" into ~/Applications and register it
+#   make uninstall-quicklook
 #
 # Variables you might override:
 #   VLC_VERSION   VLC 3.0.x release whose headers to build against (default 3.0.23)
@@ -75,7 +81,8 @@ ifneq ($(findstring t64,$(VLC_ABI)),)
   CFLAGS_ALL += -D_TIME_BITS=64
 endif
 
-.PHONY: all rust install uninstall install-user uninstall-user associate test clean distclean
+.PHONY: all rust install uninstall install-user uninstall-user associate test clean distclean \
+        quicklook install-quicklook uninstall-quicklook
 
 all: $(PLUGIN)
 
@@ -102,8 +109,16 @@ $(BUILD):
 
 install: $(PLUGIN)
 	@test -n "$(PLUGIN_DIR)" || { echo "Could not find VLC's plugin dir; pass PLUGIN_DIR=..."; exit 1; }
+ifeq ($(UNAME_S),Darwin)
+	@# VLC.app's plugins dir already exists; `install -d` would chmod it, which
+	@# macOS App Management refuses inside an app bundle. Plain cp only writes the file.
+	@cp $(PLUGIN) "$(PLUGIN_DIR)/" || { \
+	    echo "Copy into $(PLUGIN_DIR) was refused. Give your terminal app permission under"; \
+	    echo "System Settings > Privacy & Security > App Management, then re-run."; exit 1; }
+else
 	install -d "$(PLUGIN_DIR)"
 	install -m 0644 $(PLUGIN) "$(PLUGIN_DIR)/"
+endif
 ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
 endif
@@ -115,15 +130,29 @@ ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
 endif
 
-# --- Per-user install (Linux): no root needed --------------------------------
+# --- Per-user install: no root needed, VLC itself untouched -------------------
 XDG_DATA_HOME   ?= $(HOME)/.local/share
 XDG_CONFIG_HOME ?= $(HOME)/.config
 USER_PLUGIN_DIR ?= $(HOME)/.local/lib/cptv-vlc/plugins
 VLC_PATH        ?= $(shell command -v vlc 2>/dev/null || echo vlc)
+# macOS: VLC 3 has no per-user plugin dir, so a LaunchAgent sets VLC_PLUGIN_PATH
+# in the login session (launchctl setenv); every VLC started from Finder/Dock
+# then loads the plugin, and .cptv files open in the one normal VLC.
+MAC_PLUGIN_DIR  ?= $(HOME)/Library/Application Support/cptv-vlc/plugins
+AGENT_LABEL     := nz.org.cacophony.cptv-vlc
+AGENT_PLIST     := $(HOME)/Library/LaunchAgents/$(AGENT_LABEL).plist
 
 install-user: $(PLUGIN)
 ifeq ($(UNAME_S),Darwin)
-	@echo "On macOS use 'make install' (copies into VLC.app) then 'make associate'."; exit 1
+	mkdir -p "$(MAC_PLUGIN_DIR)" "$(HOME)/Library/LaunchAgents"
+	cp $(PLUGIN) "$(MAC_PLUGIN_DIR)/"
+	sed 's|@PLUGIN_DIR@|$(MAC_PLUGIN_DIR)|g' packaging/macos/$(AGENT_LABEL).plist.in > "$(AGENT_PLIST)"
+	@launchctl bootout gui/$$(id -u) "$(AGENT_PLIST)" 2>/dev/null || true
+	launchctl bootstrap gui/$$(id -u) "$(AGENT_PLIST)"
+	launchctl setenv VLC_PLUGIN_PATH "$(MAC_PLUGIN_DIR)"
+	swift scripts/macos-set-default.swift cptv org.videolan.vlc
+	@echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin."
+	@if pgrep -qx VLC; then echo "Quit and reopen VLC once so it picks up the plugin."; fi
 else
 	install -d "$(USER_PLUGIN_DIR)" "$(XDG_DATA_HOME)/applications" "$(XDG_DATA_HOME)/mime/packages" "$(XDG_CONFIG_HOME)"
 	install -m 0644 $(PLUGIN) "$(USER_PLUGIN_DIR)/"
@@ -137,11 +166,58 @@ else
 endif
 
 uninstall-user:
+ifeq ($(UNAME_S),Darwin)
+	-launchctl bootout gui/$$(id -u) "$(AGENT_PLIST)" 2>/dev/null
+	-launchctl unsetenv VLC_PLUGIN_PATH
+	rm -f "$(AGENT_PLIST)"
+	rm -rf "$(HOME)/Library/Application Support/cptv-vlc"
+else
 	rm -f "$(USER_PLUGIN_DIR)/$(notdir $(PLUGIN))" \
 	      "$(XDG_DATA_HOME)/applications/vlc-cptv.desktop" \
 	      "$(XDG_DATA_HOME)/mime/packages/cptv.xml"
 	-update-mime-database "$(XDG_DATA_HOME)/mime"
 	-update-desktop-database "$(XDG_DATA_HOME)/applications"
+endif
+
+# --- macOS Quick Look extensions ---------------------------------------------
+QL_APP_NAME     := CPTV Quick Look.app
+QL_BUILD        := $(BUILD)/$(QL_APP_NAME)
+QL_APP          ?= $(HOME)/Applications/$(QL_APP_NAME)
+LSREGISTER      := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+quicklook: rust | $(BUILD)
+	./macos/quicklook/build.sh $(RUST_LIB) "$(QL_BUILD)"
+	@# Only the installed copy should be registered with LaunchServices.
+	@$(LSREGISTER) -u "$(CURDIR)/$(QL_BUILD)" 2>/dev/null || true
+
+install-quicklook: quicklook
+	mkdir -p "$(HOME)/Applications"
+	rm -rf "$(QL_APP)"
+	ditto "$(QL_BUILD)" "$(QL_APP)"
+	$(LSREGISTER) -f -R "$(QL_APP)"
+	@# pkd handles the removal of the old copy asynchronously and can drop the
+	@# new registration after we add it, so add, wait, check, and retry.
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    pluginkit -a "$(QL_APP)/Contents/PlugIns/CPTVThumbnail.appex"; \
+	    pluginkit -a "$(QL_APP)/Contents/PlugIns/CPTVPreview.appex"; \
+	    sleep 1; \
+	    if pluginkit -m -i nz.org.cacophony.cptv-quicklook.thumbnail | grep -q thumbnail && \
+	       pluginkit -m -i nz.org.cacophony.cptv-quicklook.preview | grep -q preview; then \
+	        echo "Quick Look extensions registered"; break; \
+	    fi; \
+	    if [ $$i = 10 ]; then echo "Quick Look extensions failed to register" >&2; exit 1; fi; \
+	done
+	@# The app names the .cptv type, so point that type back at VLC for opening.
+	swift scripts/macos-set-default.swift cptv org.videolan.vlc
+	@qlmanage -r >/dev/null; qlmanage -r cache >/dev/null
+	@echo "Done: Finder shows .cptv thumbnails, and Space previews them."
+
+uninstall-quicklook:
+	@pluginkit -r "$(QL_APP)/Contents/PlugIns/CPTVThumbnail.appex" 2>/dev/null || true
+	@pluginkit -r "$(QL_APP)/Contents/PlugIns/CPTVPreview.appex" 2>/dev/null || true
+	@$(LSREGISTER) -u "$(QL_APP)" 2>/dev/null || true
+	rm -rf "$(QL_APP)"
+	@qlmanage -r >/dev/null; qlmanage -r cache >/dev/null
 
 # --- File association for a system-wide (or macOS) install --------------------
 associate:
