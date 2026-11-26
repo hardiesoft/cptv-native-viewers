@@ -1,7 +1,8 @@
 # Builds installers for macOS (universal .pkg) and Linux x86_64 (.deb for
 # Ubuntu 24.04+/Debian 13, .rpm for Fedora), testing each one.
-#   - Push a tag like v0.2.0 (matching Cargo.toml's version) to publish a
-#     GitHub Release with the three files.
+#   - Push a tag like v0.2.0 (matching Cargo.toml's version), or create a
+#     release with that tag on GitHub, and the three files are attached to
+#     the release (created if it doesn't exist yet).
 #   - Run it by hand (Actions > Release > Run workflow) to get the files as
 #     build artifacts without releasing.
 #
@@ -191,10 +192,18 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create release
+      # The release may already exist: creating one on GitHub also pushes its
+      # tag, which is what started this run. Then just attach the files
+      # (replacing any from an earlier run), keeping its title and notes.
+      - name: Create release or attach files
         env:
           GH_TOKEN: ${{ github.token }}
+          TITLE: CPTV Native Viewers ${{ needs.version.outputs.version }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "CPTV Native Viewers ${{ needs.version.outputs.version }}" --generate-notes
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" --generate-notes
+          fi

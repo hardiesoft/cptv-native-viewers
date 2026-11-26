@@ -324,7 +324,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow then creates a GitHub Release with the three files. Running it by hand
+The workflow then creates a GitHub Release with the three files. You can also create the
+release on GitHub first (**Releases → Draft a new release**, with a new `v…` tag): the
+workflow then attaches the files to it and keeps your title and notes. If you re-run the
+workflow for a tag, it replaces the release's files. Running it by hand
 (**Actions → Release → Run workflow**) builds the same files with a `-dev.<commit>` version and
 attaches them to the run as artifacts, without releasing.
 
