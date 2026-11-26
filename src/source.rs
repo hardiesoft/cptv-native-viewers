@@ -50,6 +50,19 @@ impl FrameSource {
         }
     }
 
+    /// Like [`frame`](Self::frame), but if the clip ends before `index`,
+    /// returns its last frame instead (`End` only if it has no frames). For
+    /// clips whose length isn't known up front.
+    pub fn frame_clamped(&mut self, index: usize) -> Fetch<'_> {
+        match self {
+            FrameSource::Memory(frames) => match frames.len() {
+                0 => Fetch::End,
+                n => Fetch::Frame(&frames[index.min(n - 1)]),
+            },
+            FrameSource::Stream(s) => s.frame_clamped(index),
+        }
+    }
+
     pub fn is_streaming(&self) -> bool {
         matches!(self, FrameSource::Stream(_))
     }
@@ -100,6 +113,33 @@ impl StreamSource {
             if dec.get_header().is_err() {
                 self.decoder = None;
             }
+        }
+    }
+
+    fn frame_clamped(&mut self, index: usize) -> Fetch<'_> {
+        if self.current == Some(index) {
+            return Fetch::Frame(&self.pixels);
+        }
+        // `decoder == None` means a previous call ran off the end (or the
+        // input broke): start again so the last frame can be found.
+        if index < self.next || self.decoder.is_none() {
+            self.rewind();
+        }
+        // Keep every frame decoded on the way, so if the input ends first
+        // the last one is still in `pixels`.
+        while self.next <= index {
+            let Some(dec) = self.decoder.as_mut() else { break };
+            let pixels = &mut self.pixels;
+            if next_playable(dec, |px| pixels.copy_from_slice(px)).is_none() {
+                self.decoder = None;
+                break;
+            }
+            self.current = Some(self.next);
+            self.next += 1;
+        }
+        match self.current {
+            Some(_) => Fetch::Frame(&self.pixels),
+            None => Fetch::End,
         }
     }
 

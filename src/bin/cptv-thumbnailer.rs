@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 use cptv_vlc::palette::Palette;
 use cptv_vlc::source::{Opener, Reader};
-use cptv_vlc::{Clip, Normalize, Render};
+use cptv_vlc::{Clip, Load, Normalize, Render};
 
 /// Sensor width; frames are 160×120.
 const SENSOR_W: usize = 160;
@@ -59,17 +59,18 @@ fn thumbnail(input: &Path, output: &Path, size: usize, palette: Palette) -> Resu
     let scale = size.div_ceil(SENSOR_W).clamp(1, 16);
     let path = input.to_path_buf();
     let open: Opener = Box::new(move || Ok(Box::new(BufReader::new(File::open(&path)?)) as Reader));
-    // Per-frame normalisation: never needs a pass over the whole file.
-    let mut clip = Clip::open_with(open, palette, Normalize::Frame, scale)?;
+    // Per-frame normalisation never needs a pass over the whole file, and
+    // StreamOnly never decodes the whole clip into memory (older files have
+    // no frame count in the header; a 10-minute one would take ~200 MB).
+    let mut clip = Clip::open_with_load(open, palette, Normalize::Frame, scale, Load::StreamOnly)?;
 
     // Frames are delta-coded in one gzip stream, so frame N costs N decodes.
-    // About a second in skips any start-up frames but stays cheap.
-    let target = (clip.fps.round() as usize).min(clip.frame_count.saturating_sub(1));
+    // About a second in skips any start-up frames but stays cheap; a shorter
+    // clip gives its last frame (the frame count may be unknown here).
+    let target = clip.fps.round() as usize;
     let (w, h) = (clip.width(), clip.height());
     let mut argb = vec![0u8; w * h * 4];
-    if clip.render(target, &mut argb, w * 4) != Render::Ok
-        && clip.render(0, &mut argb, w * 4) != Render::Ok
-    {
+    if clip.render_clamped(target, &mut argb, w * 4) != Render::Ok {
         return Err("no frames".into());
     }
 

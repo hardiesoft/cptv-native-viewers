@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use common::{fixture, marker, Synth};
 use cptv_vlc::palette::Palette;
-use cptv_vlc::{probe, Clip, Normalize, Render};
+use cptv_vlc::{probe, Clip, Load, Normalize, Render};
 
 
 fn open(data: Vec<u8>, norm: Normalize) -> Clip {
@@ -185,4 +185,78 @@ fn write_synthetic_clips() {
     let without = Synth { total_in_header: None, ..with_total };
     std::fs::write(format!("{dir}/synthetic-10min-streaming.cptv"), with_total.encode()).unwrap();
     std::fs::write(format!("{dir}/synthetic-10min-in-memory.cptv"), without.encode()).unwrap();
+}
+
+fn open_stream_only(data: Vec<u8>) -> Result<Clip, String> {
+    Clip::open_bytes_with_load(data, Palette::Viridis, Normalize::Frame, 1, Load::StreamOnly)
+}
+
+#[test]
+fn stream_only_never_loads_old_clips_into_memory() {
+    // No total_frames in the header: Auto would decode all of it up front.
+    let frames = 9 * 60 * 10;
+    let data = Synth { frames, fps: 9, total_in_header: None, minmax_in_header: None }.encode();
+    let mut clip = open_stream_only(data).unwrap();
+    assert!(clip.is_streaming());
+    assert_eq!(clip.frame_count, 0, "count is unknown without decoding everything");
+    assert_eq!(clip.raw_frame(9).unwrap()[0], marker(9));
+    assert_eq!(clip.raw_frame(0).unwrap()[0], marker(0)); // rewind
+    assert_eq!(clip.raw_frame(frames - 1).unwrap()[0], marker(frames - 1));
+    assert!(clip.raw_frame(frames).is_none(), "past the end");
+}
+
+#[test]
+fn stream_only_keeps_header_frame_count() {
+    let clip = open_stream_only(fixture("20240507-074536.cptv")).unwrap();
+    assert_eq!((clip.frame_count, clip.is_streaming()), (46, true));
+}
+
+#[test]
+fn stream_only_short_and_empty_clips() {
+    // Shorter than the thumbnail's one-second target: frame 0 is still there.
+    let short = Synth { frames: 3, fps: 9, total_in_header: None, minmax_in_header: None }.encode();
+    let mut clip = open_stream_only(short).unwrap();
+    let mut buf = vec![0u8; clip.width() * clip.height() * 4];
+    let pitch = clip.width() * 4;
+    assert_eq!(clip.render(9, &mut buf, pitch), Render::End);
+    assert_eq!(clip.render(0, &mut buf, pitch), Render::Ok);
+    // Header but no frames is still an error, as with Load::Auto.
+    let empty = Synth { frames: 0, fps: 9, total_in_header: None, minmax_in_header: None }.encode();
+    assert!(open_stream_only(empty).is_err());
+}
+
+#[test]
+fn stream_only_matches_auto_on_every_upstream_fixture() {
+    for name in ["20180603-090916.cptv", "20201221-748923.cptv", "20240507-074536.cptv", "20240917-1921337.cptv"] {
+        let mut auto = open(fixture(name), Normalize::Frame);
+        let mut lazy = open_stream_only(fixture(name)).unwrap();
+        for i in [9, 0, auto.frame_count - 1] {
+            assert_eq!(auto.raw_frame(i).unwrap().to_vec(), lazy.raw_frame(i).unwrap(), "{name} frame {i}");
+        }
+    }
+}
+
+/// Render `index` (clamped or not) and return the RGB bytes.
+fn rendered(clip: &mut Clip, index: usize, clamped: bool) -> Option<Vec<u8>> {
+    let pitch = clip.width() * 4;
+    let mut buf = vec![0u8; pitch * clip.height()];
+    let r = if clamped { clip.render_clamped(index, &mut buf, pitch) } else { clip.render(index, &mut buf, pitch) };
+    (r == Render::Ok).then_some(buf)
+}
+
+#[test]
+fn render_clamped_gives_last_frame_of_short_clips() {
+    // Like cacophony-web's oneframe.cptv: no total_frames, under a second long.
+    for (total, load) in [(None, Load::StreamOnly), (None, Load::Auto), (Some(4), Load::StreamOnly)] {
+        let data = Synth { frames: 4, fps: 9, total_in_header: total, minmax_in_header: None }.encode();
+        let mut clip = Clip::open_bytes_with_load(data, Palette::Grey, Normalize::Frame, 1, load).unwrap();
+        let last = rendered(&mut clip, 3, false).unwrap();
+        assert_eq!(rendered(&mut clip, 9, true).unwrap(), last, "{total:?} {load:?}");
+        // Also after a plain render has already run off the end.
+        assert!(rendered(&mut clip, 9, false).is_none());
+        assert_eq!(rendered(&mut clip, 9, true).unwrap(), last, "{total:?} {load:?} after End");
+        // In range, clamped is the same as plain.
+        let first = rendered(&mut clip, 0, false).unwrap();
+        assert_eq!(rendered(&mut clip, 0, true).unwrap(), first);
+    }
 }

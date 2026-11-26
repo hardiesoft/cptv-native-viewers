@@ -10,8 +10,13 @@
 #                        LaunchAgent putting it on VLC's plugin path, and VLC set
 #                        as the default app for .cptv files
 #   Linux, system-wide / macOS:
-#   make install         copy plugin into VLC's own plugin dir (sudo on Linux)
+#   make install         copy plugin into VLC's own plugin dir (sudo on Linux;
+#                        on Linux also runs install-thumbnailer)
 #   make associate       make VLC the default app for .cptv files
+#   Linux file-manager thumbnails (GNOME only runs thumbnailers from /usr):
+#   sudo make install-thumbnailer   thumbnailer + .thumbnailer entry into $(PREFIX)
+#   sudo make uninstall-thumbnailer
+#   On Linux, run plain `make` first: install targets never build under sudo.
 #   macOS Quick Look (Finder thumbnails + spacebar preview):
 #   make install-quicklook   build "CPTV Quick Look.app" into ~/Applications and register it
 #   make uninstall-quicklook
@@ -76,6 +81,17 @@ else
   LINUX_EXTRAS := $(THUMBNAILER)
 endif
 
+# Install targets that may run under sudo must not build anything: root
+# usually has no cargo on PATH (or no rustup toolchain), and a build would
+# leave root-owned files in target/. On Linux they only check that `make`
+# has already been run; macOS installs don't use sudo, so they still build.
+ifeq ($(UNAME_S),Darwin)
+  INSTALL_PREREQS := $(PLUGIN)
+else
+  INSTALL_PREREQS :=
+endif
+need_built = @test -e "$(1)" || { echo "$(1) not found: run 'make' (without sudo) first" >&2; exit 1; }
+
 # The ABI tag VLC looks for in plugins ("vlc_entry__<tag>"). Debian/Ubuntu use
 # 3_0_0ft64; upstream builds (incl. macOS VLC.app) use 3_0_0f.
 ifneq ($(LIBVLCCORE),)
@@ -90,9 +106,9 @@ ifneq ($(findstring t64,$(VLC_ABI)),)
 endif
 
 .PHONY: all rust thumbnailer install uninstall install-user uninstall-user associate test clean distclean \
-        quicklook install-quicklook uninstall-quicklook
+        quicklook install-quicklook uninstall-quicklook install-thumbnailer uninstall-thumbnailer
 
-all: $(PLUGIN)
+all: $(PLUGIN) $(LINUX_EXTRAS)
 
 $(HEADERS_STAMP):
 	./scripts/fetch-vlc-headers.sh $(VLC_VERSION) third_party/vlc-$(VLC_VERSION)
@@ -120,7 +136,8 @@ endif
 $(BUILD):
 	mkdir -p $@
 
-install: $(PLUGIN) $(LINUX_EXTRAS)
+install: $(INSTALL_PREREQS)
+	$(call need_built,$(PLUGIN))
 	@test -n "$(PLUGIN_DIR)" || { echo "Could not find VLC's plugin dir; pass PLUGIN_DIR=..."; exit 1; }
 ifeq ($(UNAME_S),Darwin)
 	@# VLC.app's plugins dir already exists; `install -d` would chmod it, which
@@ -131,12 +148,7 @@ ifeq ($(UNAME_S),Darwin)
 else
 	install -d "$(PLUGIN_DIR)"
 	install -m 0644 $(PLUGIN) "$(PLUGIN_DIR)/"
-	@# Thumbnailer under /usr: GNOME runs thumbnailers in a bubblewrap sandbox
-	@# that only exposes system dirs, so a copy in $$HOME may not run there.
-	install -d "$(PREFIX)/bin" "$(PREFIX)/share/thumbnailers"
-	install -m 0755 $(THUMBNAILER) "$(PREFIX)/bin/"
-	sed 's|@BIN@|$(PREFIX)/bin/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
-	    > "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
+	@$(MAKE) --no-print-directory install-thumbnailer
 endif
 ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
@@ -146,11 +158,26 @@ endif
 uninstall:
 	rm -f "$(PLUGIN_DIR)/$(notdir $(PLUGIN))"
 ifneq ($(UNAME_S),Darwin)
-	rm -f "$(PREFIX)/bin/cptv-thumbnailer" "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
+	@$(MAKE) --no-print-directory uninstall-thumbnailer
 endif
 ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
 endif
+
+# --- Linux file-manager thumbnailer, system-wide ------------------------------
+# GNOME (and Cinnamon) run thumbnailers in a bubblewrap sandbox that only
+# mounts /usr, so the binary has to live there; $(PREFIX)/share is on the
+# desktop's XDG_DATA_DIRS. No build here (see INSTALL_PREREQS).
+install-thumbnailer:
+	$(call need_built,$(THUMBNAILER))
+	install -d "$(PREFIX)/bin" "$(PREFIX)/share/thumbnailers"
+	install -m 0755 $(THUMBNAILER) "$(PREFIX)/bin/"
+	sed 's|@BIN@|$(PREFIX)/bin/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
+	    > "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
+	@echo "Installed $(PREFIX)/bin/cptv-thumbnailer. Restart the file manager (nautilus -q)."
+
+uninstall-thumbnailer:
+	rm -f "$(PREFIX)/bin/cptv-thumbnailer" "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
 
 # --- Per-user install: no root needed, VLC itself untouched -------------------
 XDG_DATA_HOME   ?= $(HOME)/.local/share
@@ -185,12 +212,22 @@ else
 	-update-mime-database "$(XDG_DATA_HOME)/mime"
 	-update-desktop-database "$(XDG_DATA_HOME)/applications"
 	xdg-mime default vlc-cptv.desktop video/x-cptv
-	install -d "$(USER_LIB_DIR)" "$(XDG_DATA_HOME)/thumbnailers"
-	install -m 0755 $(THUMBNAILER) "$(USER_LIB_DIR)/"
-	sed 's|@BIN@|$(USER_LIB_DIR)/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
-	    > "$(XDG_DATA_HOME)/thumbnailers/cptv.thumbnailer"
-	@echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin,"
-	@echo "and file managers can show .cptv thumbnails (GNOME may need 'sudo make install')."
+	@# Thumbnails: where file managers sandbox thumbnailers with bubblewrap
+	@# (GNOME, Cinnamon) a copy in $$HOME can't run, and a per-user .thumbnailer
+	@# entry would override a working one in /usr/local, so don't install one.
+	@if command -v bwrap >/dev/null 2>&1; then \
+	    rm -f "$(USER_LIB_DIR)/cptv-thumbnailer" "$(XDG_DATA_HOME)/thumbnailers/cptv.thumbnailer"; \
+	    echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin."; \
+	    echo "For file-manager thumbnails, also run: sudo make install-thumbnailer"; \
+	    echo "(this desktop sandboxes thumbnailers, so they must be installed under /usr)."; \
+	else \
+	    install -d "$(USER_LIB_DIR)" "$(XDG_DATA_HOME)/thumbnailers" && \
+	    install -m 0755 $(THUMBNAILER) "$(USER_LIB_DIR)/" && \
+	    sed 's|@BIN@|$(USER_LIB_DIR)/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
+	        > "$(XDG_DATA_HOME)/thumbnailers/cptv.thumbnailer" && \
+	    echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin," && \
+	    echo "and file managers can show .cptv thumbnails."; \
+	fi
 endif
 
 uninstall-user:

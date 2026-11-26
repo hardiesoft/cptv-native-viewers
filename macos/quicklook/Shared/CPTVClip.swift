@@ -24,13 +24,18 @@ final class CPTVClip {
 
     var width: Int { Int(info.width) }
     var height: Int { Int(info.height) }
+    /// 0 if unknown (only with `streamOnly`).
     var frameCount: Int { Int(info.frame_count) }
     var fps: Double { info.fps > 0 ? info.fps : 9 }
 
     /// - normalizeClip: one brightness range for the whole clip (stable for
     ///   playback, but may read the whole file on open if the header lacks
     ///   min/max). Off stretches each frame on its own, which is cheap.
-    init(url: URL, palette: String = "viridis", normalizeClip: Bool, scale: UInt32 = 4) throws {
+    /// - streamOnly: never decode the whole clip on open, even for older files
+    ///   without a frame count in the header. `frameCount` is then 0 (unknown)
+    ///   for those. For thumbnails, which only need an early frame.
+    init(url: URL, palette: String = "viridis", normalizeClip: Bool, scale: UInt32 = 4,
+         streamOnly: Bool = false) throws {
         guard let f = fopen(url.path, "rb") else {
             throw CPTVError.open(String(cString: strerror(errno)))
         }
@@ -49,7 +54,9 @@ final class CPTVClip {
             }))
 
         var err = [CChar](repeating: 0, count: 256)
-        guard let c = cptv_open_io(io, palette, normalizeClip ? 1 : 0, scale, &err, err.count) else {
+        let flags = streamOnly ? UInt32(CPTV_OPEN_STREAM_ONLY) : 0
+        guard let c = cptv_open_io_flags(io, palette, normalizeClip ? 1 : 0, scale, flags,
+                                         &err, err.count) else {
             io.deallocate()
             fclose(f)
             throw CPTVError.open(String(cString: err))
@@ -74,13 +81,17 @@ final class CPTVClip {
     }
 
     /// Renders frame `index`, or returns nil past the last frame that decodes.
+    /// With `clamped`, a clip shorter than `index + 1` frames gives its last
+    /// frame instead (nil only if it has none).
     /// Going backwards rewinds and re-decodes from the start (streaming clips).
-    func image(at index: Int) -> CGImage? {
+    func image(at index: Int, clamped: Bool = false) -> CGImage? {
         let pitch = width * 4
         var data = Data(count: pitch * height)
         let r = data.withUnsafeMutableBytes { buf in
-            cptv_render(clip, UInt32(index), buf.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                        buf.count, pitch)
+            let dst = buf.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            return clamped
+                ? cptv_render_clamped(clip, UInt32(index), dst, buf.count, pitch)
+                : cptv_render(clip, UInt32(index), dst, buf.count, pitch)
         }
         guard r == 1, let provider = CGDataProvider(data: data as CFData) else { return nil }
         // RV32 = native-endian 0xAARRGGBB, i.e. BGRA bytes on Apple silicon/Intel.

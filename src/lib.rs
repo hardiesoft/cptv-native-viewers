@@ -37,6 +37,20 @@ pub enum Normalize {
     Clip,
 }
 
+/// How much of a clip may be decoded when it's opened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Load {
+    /// Stream when the header has `total_frames`; otherwise decode the whole
+    /// clip into memory so its length is known (what a player needs).
+    #[default]
+    Auto,
+    /// Always decode on demand, even without `total_frames`. The frame count
+    /// is then unknown (reported as 0) and rendering past the last frame
+    /// returns [`Render::End`]. For thumbnails: only early frames are needed,
+    /// and a long old-format clip would otherwise take ~200 MB to load.
+    StreamOnly,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Render {
     Ok,
@@ -48,6 +62,7 @@ pub enum Render {
 
 pub struct Clip {
     source: FrameSource,
+    /// Number of playable frames; 0 if unknown (only with [`Load::StreamOnly`]).
     pub frame_count: usize,
     pub fps: f64,
     pub scale: usize,
@@ -132,6 +147,16 @@ impl Clip {
         normalize: Normalize,
         scale: usize,
     ) -> Result<Clip, String> {
+        Clip::open_bytes_with_load(data, palette, normalize, scale, Load::Auto)
+    }
+
+    pub fn open_bytes_with_load(
+        data: Vec<u8>,
+        palette: Palette,
+        normalize: Normalize,
+        scale: usize,
+        load: Load,
+    ) -> Result<Clip, String> {
         // The upstream decoder expects a gzip stream. Some VLC stream filters
         // may hand us already-inflated data, so re-wrap it if needed.
         let data = if is_gzip(&data) {
@@ -148,16 +173,26 @@ impl Clip {
         };
         let data: Arc<[u8]> = data.into();
         let open: Opener = Box::new(move || Ok(Box::new(Cursor::new(data.clone())) as _));
-        Clip::open_with(open, palette, normalize, scale)
+        Clip::open_with_load(open, palette, normalize, scale, load)
     }
 
     /// Open a clip from a re-openable byte stream. `open` is called once up
     /// front and again whenever a streaming clip has to rewind.
     pub fn open_with(
+        open: Opener,
+        palette: Palette,
+        normalize: Normalize,
+        scale: usize,
+    ) -> Result<Clip, String> {
+        Clip::open_with_load(open, palette, normalize, scale, Load::Auto)
+    }
+
+    pub fn open_with_load(
         mut open: Opener,
         palette: Palette,
         normalize: Normalize,
         scale: usize,
+        load: Load,
     ) -> Result<Clip, String> {
         let mut magic = [0u8; 2];
         open().and_then(|mut r| r.read_exact(&mut magic)).map_err(io_err)?;
@@ -166,7 +201,7 @@ impl Clip {
             // stream filter decompressed it for us).
             let mut data = Vec::new();
             open().and_then(|mut r| r.read_to_end(&mut data)).map_err(io_err)?;
-            return Clip::open_bytes(data, palette, normalize, scale);
+            return Clip::open_bytes_with_load(data, palette, normalize, scale, load);
         }
 
         let mut dec = new_decoder(&mut open).map_err(io_err)?;
@@ -176,8 +211,9 @@ impl Clip {
             _ => None,
         };
 
-        let (source, frame_count, range) = match header.total_frame_count {
-            Some(total) if total > 0 => {
+        let total = header.total_frame_count.filter(|&t| t > 0).map(usize::from);
+        let (mut source, frame_count, range) = match (total, load) {
+            (Some(_), _) | (None, Load::StreamOnly) => {
                 let mut range = header_range;
                 if range.is_none() && normalize == Normalize::Clip {
                     // One decode pass without keeping frames, then rewind.
@@ -188,9 +224,9 @@ impl Clip {
                     dec.get_header().map_err(io_err)?;
                 }
                 let src = FrameSource::Stream(StreamSource::new(open, dec));
-                (src, total as usize, range)
+                (src, total.unwrap_or(0), range)
             }
-            _ => {
+            (None, Load::Auto) => {
                 let mut frames = Vec::new();
                 let mut range = header_range;
                 let scan = range.is_none();
@@ -204,7 +240,10 @@ impl Clip {
                 (FrameSource::Memory(frames), n, range)
             }
         };
-        if frame_count == 0 {
+        // With an unknown count, decoding frame 0 (which stays cached) is the
+        // cheap way to reject files that have no frames.
+        let unknown_count = frame_count == 0 && load == Load::StreamOnly;
+        if !(frame_count > 0 || unknown_count && matches!(source.frame(0), Fetch::Frame(_))) {
             return Err("CPTV file contains no frames".into());
         }
 
@@ -246,11 +285,27 @@ impl Clip {
     /// Render frame `index` as native-endian 0xAARRGGBB pixels into `dst`,
     /// whose rows are `pitch` bytes apart.
     pub fn render(&mut self, index: usize, dst: &mut [u8], pitch: usize) -> Render {
+        self.render_impl(index, false, dst, pitch)
+    }
+
+    /// Like [`render`](Self::render), but if the clip has fewer frames than
+    /// `index + 1`, renders its last frame. Useful for thumbnails when the
+    /// frame count is unknown ([`Load::StreamOnly`]).
+    pub fn render_clamped(&mut self, index: usize, dst: &mut [u8], pitch: usize) -> Render {
+        self.render_impl(index, true, dst, pitch)
+    }
+
+    fn render_impl(&mut self, index: usize, clamp: bool, dst: &mut [u8], pitch: usize) -> Render {
         let (out_w, out_h) = (self.width(), self.height());
         if pitch < out_w * 4 || dst.len() < pitch * (out_h - 1) + out_w * 4 {
             return Render::BadBuffer;
         }
-        let pixels = match self.source.frame(index) {
+        let fetched = if clamp {
+            self.source.frame_clamped(index)
+        } else {
+            self.source.frame(index)
+        };
+        let pixels = match fetched {
             Fetch::Frame(px) => px,
             Fetch::End => return Render::End,
         };
@@ -431,6 +486,10 @@ pub unsafe extern "C" fn cptv_probe(buf: *const u8, len: usize) -> c_int {
     catch_unwind(|| probe(data) as c_int).unwrap_or(0)
 }
 
+/// `cptv_open_io_flags` flag: decode on demand even without `total_frames`
+/// in the header (see [`Load::StreamOnly`]).
+pub const CPTV_OPEN_STREAM_ONLY: u32 = 1;
+
 /// Open a CPTV clip read through `io`. The callbacks (and their `opaque`)
 /// must stay valid until `cptv_close`. Returns NULL on failure, with a
 /// message written to `err`.
@@ -440,6 +499,20 @@ pub unsafe extern "C" fn cptv_open_io(
     palette: *const c_char,
     normalize_clip: c_int,
     scale: u32,
+    err: *mut c_char,
+    err_len: usize,
+) -> *mut Clip {
+    cptv_open_io_flags(io, palette, normalize_clip, scale, 0, err, err_len)
+}
+
+/// As `cptv_open_io`, with `CPTV_OPEN_*` flags.
+#[no_mangle]
+pub unsafe extern "C" fn cptv_open_io_flags(
+    io: *const CptvIo,
+    palette: *const c_char,
+    normalize_clip: c_int,
+    scale: u32,
+    flags: u32,
     err: *mut c_char,
     err_len: usize,
 ) -> *mut Clip {
@@ -453,8 +526,9 @@ pub unsafe extern "C" fn cptv_open_io(
         Palette::from_name(&CStr::from_ptr(palette).to_string_lossy())
     };
     let norm = if normalize_clip != 0 { Normalize::Clip } else { Normalize::Frame };
+    let load = if flags & CPTV_OPEN_STREAM_ONLY != 0 { Load::StreamOnly } else { Load::Auto };
     match catch_unwind(AssertUnwindSafe(|| {
-        Clip::open_with(io_opener(io), pal, norm, scale as usize)
+        Clip::open_with_load(io_opener(io), pal, norm, scale as usize, load)
     })) {
         Ok(Ok(clip)) => Box::into_raw(Box::new(clip)),
         Ok(Err(e)) => {
@@ -513,6 +587,28 @@ pub unsafe extern "C" fn cptv_render(
     }
     let out = std::slice::from_raw_parts_mut(dst, dst_len);
     match catch_unwind(AssertUnwindSafe(|| clip.render(index as usize, out, pitch))) {
+        Ok(Render::Ok) => 1,
+        Ok(Render::End) => 0,
+        _ => -1,
+    }
+}
+
+/// As `cptv_render`, but renders the clip's last frame if it has fewer than
+/// `index + 1` frames (returns 0 only if it has none).
+#[no_mangle]
+pub unsafe extern "C" fn cptv_render_clamped(
+    clip: *mut Clip,
+    index: u32,
+    dst: *mut u8,
+    dst_len: usize,
+    pitch: usize,
+) -> c_int {
+    let Some(clip) = clip.as_mut() else { return -1 };
+    if dst.is_null() {
+        return -1;
+    }
+    let out = std::slice::from_raw_parts_mut(dst, dst_len);
+    match catch_unwind(AssertUnwindSafe(|| clip.render_clamped(index as usize, out, pitch))) {
         Ok(Render::Ok) => 1,
         Ok(Render::End) => 0,
         _ => -1,

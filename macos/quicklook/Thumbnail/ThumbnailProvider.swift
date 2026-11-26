@@ -10,13 +10,16 @@ final class ThumbnailProvider: QLThumbnailProvider {
             // Sensor frames are 160 px wide; upscale only as far as the request needs.
             let pixels = max(request.maximumSize.width, request.maximumSize.height) * request.scale
             let scale = UInt32(min(4, max(1, (pixels / 160).rounded(.up))))
-            // Per-frame normalisation: never needs a pass over the whole file.
-            let clip = try CPTVClip(url: request.fileURL, normalizeClip: false, scale: scale)
+            // Per-frame normalisation never needs a pass over the whole file, and
+            // streamOnly never decodes the whole clip into memory (older files have
+            // no frame count in the header; a 10-minute one would take ~200 MB).
+            let clip = try CPTVClip(url: request.fileURL, normalizeClip: false, scale: scale,
+                                    streamOnly: true)
 
             // Frames are delta-coded in one gzip stream, so frame N costs N decodes.
-            // About one second in skips any start-up frames but stays cheap.
-            let target = min(Int(clip.fps.rounded()), max(clip.frameCount - 1, 0))
-            guard let image = clip.image(at: target) ?? clip.image(at: 0) else {
+            // About one second in skips any start-up frames but stays cheap; a
+            // shorter clip gives its last frame (the frame count may be unknown).
+            guard let image = clip.image(at: Int(clip.fps.rounded()), clamped: true) else {
                 throw CPTVError.noFrames
             }
 

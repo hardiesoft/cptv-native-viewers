@@ -82,9 +82,11 @@ This command:
 - adds a hidden launcher, "VLC (CPTV thermal video)" (`~/.local/share/applications/vlc-cptv.desktop`),
   which runs VLC with `VLC_PLUGIN_PATH` pointing at the plugin
 - makes that launcher the default app for `.cptv` files
-- installs the file-manager thumbnailer (see [Linux file-manager
-  thumbnails](#linux-file-manager-thumbnails)) in `~/.local/lib/cptv-vlc/` and
-  `~/.local/share/thumbnailers/`
+- installs the file-manager thumbnailer in `~/.local/lib/cptv-vlc/` and
+  `~/.local/share/thumbnailers/`, but only on desktops that don't sandbox thumbnailers.
+  On GNOME and Cinnamon (any system with `bwrap`), it installs nothing for thumbnails and
+  tells you to run `sudo make install-thumbnailer` instead. See [Linux file-manager
+  thumbnails](#linux-file-manager-thumbnails).
 
 To undo it, run `make uninstall-user`.
 
@@ -94,6 +96,7 @@ running, because that copy may not have the plugin loaded.
 ### Linux, system-wide
 
 ```bash
+make                  # build as yourself first; install targets never build under sudo
 sudo make install     # copies into /usr/lib/<triplet>/vlc/plugins/demux and refreshes VLC's plugin cache,
                       # and installs the thumbnailer into /usr/local (set PREFIX=... to change)
 make associate        # .cptv → MIME type, and vlc.desktop as the default app
@@ -111,22 +114,51 @@ registered for `video/x-cptv` by a `cptv.thumbnailer` file and run as
 so does Thunar through tumbler. KDE's Dolphin doesn't support this format; it would need a
 separate KIO thumbnail plugin.
 
-It draws the same frame as the macOS thumbnails, about a second in, with that frame's contrast
-stretched, so it never reads through the whole file. That takes about 10–60 ms per file. To
+It draws the same frame as the macOS thumbnails, about a second in (or the last frame of a
+shorter clip), with that frame's contrast stretched. It opens clips with the core's
+stream-only mode, so it never reads through or holds the whole file, even for older files
+without `total_frames`. That takes about 10–60 ms and under 5 MB of memory per file. Before
+this, a 10-minute old-format clip took 0.4 s and 207 MB. To
 build it on its own, run `make thumbnailer`, which runs
 `cargo build --release --features thumbnailer`.
 
-Both `make install-user` and `sudo make install` install it, but they need the `video/x-cptv`
-MIME type from `make install-user` or `make associate`. Recent GNOME versions run thumbnailers
-in a bubblewrap sandbox that may only expose system folders, so if thumbnails don't appear in
-GNOME Files after `make install-user`, use `sudo make install` too. That puts it in
-`/usr/local`.
+#### Installing on GNOME (and Cinnamon)
+
+GNOME runs thumbnailers in a bubblewrap sandbox that mounts only `/usr`, so a thumbnailer in
+your home folder can't run there. It fails with "No such file or directory". It also has to
+be the only `cptv.thumbnailer` entry, because an entry in `~/.local/share/thumbnailers`
+overrides one in `/usr/local/share/thumbnailers`. To install it:
+
+```bash
+make                            # as yourself
+sudo make install-thumbnailer   # just the thumbnailer: /usr/local/bin + /usr/local/share/thumbnailers
+nautilus -q                     # restart Files
+```
+
+`sudo make install` does the same as part of the system-wide install, and
+`sudo make uninstall-thumbnailer` removes it. Either way, you also need the `video/x-cptv` MIME
+type from `make install-user` or `make associate`.
+
+On desktops that don't sandbox thumbnailers (for example, Thunar through tumbler), `make
+install-user` installs a per-user copy that works without root.
 
 GNOME remembers failed thumbnails and won't retry those files. After changing anything, clear
 `~/.cache/thumbnails/fail/` and restart the file manager (`nautilus -q`).
 
-The macOS build and tests have run this code, but it hasn't been tried in a Linux file manager
-yet.
+#### What's been tested on Linux
+
+On Ubuntu with GNOME Files 50, after `sudo make install-thumbnailer` and a Files restart:
+
+- **Files:** Files generates and caches thumbnails for a folder of `.cptv` clips.
+- **Thumbnail factory:** through GNOME's own thumbnail factory (libgnome-desktop-4, which
+  Files uses), with its real bubblewrap sandbox and seccomp filter, all upstream samples
+  thumbnail at every size Files asks for (128–1024 px).
+- **Real recordings:** 38 distinct real recordings and test files were tried. Every valid one
+  produced a thumbnail. The deliberately empty and invalid files failed cleanly, and Files
+  shows a generic icon for those.
+
+Not yet tried: the per-user install on a file manager that doesn't sandbox thumbnailers (for
+example, Thunar).
 
 ### macOS, no admin rights (recommended)
 
@@ -183,9 +215,10 @@ Rust core through `vlc/cptv_core.h`:
 - **Thumbnail**: Finder icons and gallery view show a frame about one second into the clip.
   CPTV frames are delta-coded in one gzip stream, so frame *N* costs *N* decodes. That's why
   it uses an early frame rather than the middle one. It also stretches the contrast of that one
-  frame instead of normalising over the whole clip, so it never reads through the whole file.
-  Each thumbnail takes about 50–80 ms. Older files without `total_frames` are the exception:
-  they're decoded fully into memory when they open. Thumbnails are drawn like photo
+  frame instead of normalising over the whole clip, and opens the clip in stream-only mode
+  (`CPTV_OPEN_STREAM_ONLY`), so it never reads through or holds the whole file, even for older
+  files without `total_frames`. A clip shorter than a second gives its last frame. Each
+  thumbnail takes about 50–80 ms. Thumbnails are drawn like photo
   thumbnails, with rounded corners and a drop shadow, rather than inside a document icon with a
   folded corner. That uses a private `QLThumbnailReply` property (`iconFlavor` = 1, the old
   "shadow" style), which the code sets only if it exists, so if a future macOS removes it,
