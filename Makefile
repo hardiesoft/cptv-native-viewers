@@ -23,6 +23,8 @@
 #   VLC_APP       macOS VLC.app location (default /Applications/VLC.app)
 #   VLC_ABI       plugin ABI tag, e.g. 3_0_0f or 3_0_0ft64 (default: detected
 #                 from the installed libvlccore)
+#   PREFIX        Linux: where `make install` puts the file-manager thumbnailer
+#                 (default /usr/local)
 
 VLC_VERSION ?= 3.0.23
 UNAME_S     := $(shell uname -s)
@@ -30,6 +32,9 @@ CARGO       ?= cargo
 CC          ?= cc
 
 RUST_LIB    := target/release/libcptv_vlc.a
+# Freedesktop thumbnailer (Linux file managers); also builds and tests on macOS.
+THUMBNAILER := target/release/cptv-thumbnailer
+PREFIX      ?= /usr/local
 BUILD       := build
 
 ifneq ($(shell pkg-config --exists vlc-plugin 2>/dev/null && echo yes),)
@@ -54,7 +59,8 @@ ifeq ($(UNAME_S),Darwin)
                  -framework CoreFoundation -lSystem -lc -lm -liconv
   VLC_BIN     ?= $(VLC_APP)/Contents/MacOS/VLC
   LIBVLCCORE  ?= $(firstword $(wildcard $(VLC_APP)/Contents/MacOS/lib/libvlccore*.dylib))
-  CACHE_GEN   := 
+  CACHE_GEN   :=
+  LINUX_EXTRAS :=
 else
   PLUGIN      := $(BUILD)/libcptv_plugin.so
   VLC_LIBDIR  ?= $(firstword $(wildcard /usr/lib/$(shell $(CC) -dumpmachine)/vlc /usr/lib64/vlc /usr/lib/vlc /usr/local/lib/vlc))
@@ -66,6 +72,8 @@ else
   VLC_BIN     ?= vlc
   LIBVLCCORE  ?= $(firstword $(wildcard /usr/lib/$(shell $(CC) -dumpmachine)/libvlccore.so.* /usr/lib64/libvlccore.so.* /usr/lib/libvlccore.so.* /usr/local/lib/libvlccore.so.*))
   CACHE_GEN   := $(firstword $(wildcard $(VLC_LIBDIR)/vlc-cache-gen))
+  # Installed alongside the plugin on Linux: the file-manager thumbnailer.
+  LINUX_EXTRAS := $(THUMBNAILER)
 endif
 
 # The ABI tag VLC looks for in plugins ("vlc_entry__<tag>"). Debian/Ubuntu use
@@ -81,7 +89,7 @@ ifneq ($(findstring t64,$(VLC_ABI)),)
   CFLAGS_ALL += -D_TIME_BITS=64
 endif
 
-.PHONY: all rust install uninstall install-user uninstall-user associate test clean distclean \
+.PHONY: all rust thumbnailer install uninstall install-user uninstall-user associate test clean distclean \
         quicklook install-quicklook uninstall-quicklook
 
 all: $(PLUGIN)
@@ -93,6 +101,11 @@ rust:
 	$(CARGO) build --release --lib
 
 $(RUST_LIB): rust
+
+thumbnailer:
+	$(CARGO) build --release --features thumbnailer --bin cptv-thumbnailer
+
+$(THUMBNAILER): thumbnailer
 
 $(BUILD)/cptv_demux.o: vlc/cptv_demux.c vlc/cptv_core.h Makefile $(HEADERS_STAMP) | $(BUILD)
 	$(CC) $(CFLAGS_ALL) -c $< -o $@
@@ -107,7 +120,7 @@ endif
 $(BUILD):
 	mkdir -p $@
 
-install: $(PLUGIN)
+install: $(PLUGIN) $(LINUX_EXTRAS)
 	@test -n "$(PLUGIN_DIR)" || { echo "Could not find VLC's plugin dir; pass PLUGIN_DIR=..."; exit 1; }
 ifeq ($(UNAME_S),Darwin)
 	@# VLC.app's plugins dir already exists; `install -d` would chmod it, which
@@ -118,6 +131,12 @@ ifeq ($(UNAME_S),Darwin)
 else
 	install -d "$(PLUGIN_DIR)"
 	install -m 0644 $(PLUGIN) "$(PLUGIN_DIR)/"
+	@# Thumbnailer under /usr: GNOME runs thumbnailers in a bubblewrap sandbox
+	@# that only exposes system dirs, so a copy in $$HOME may not run there.
+	install -d "$(PREFIX)/bin" "$(PREFIX)/share/thumbnailers"
+	install -m 0755 $(THUMBNAILER) "$(PREFIX)/bin/"
+	sed 's|@BIN@|$(PREFIX)/bin/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
+	    > "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
 endif
 ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
@@ -126,6 +145,9 @@ endif
 
 uninstall:
 	rm -f "$(PLUGIN_DIR)/$(notdir $(PLUGIN))"
+ifneq ($(UNAME_S),Darwin)
+	rm -f "$(PREFIX)/bin/cptv-thumbnailer" "$(PREFIX)/share/thumbnailers/cptv.thumbnailer"
+endif
 ifneq ($(CACHE_GEN),)
 	-$(CACHE_GEN) "$(dir $(PLUGIN_DIR:/=))"
 endif
@@ -133,7 +155,8 @@ endif
 # --- Per-user install: no root needed, VLC itself untouched -------------------
 XDG_DATA_HOME   ?= $(HOME)/.local/share
 XDG_CONFIG_HOME ?= $(HOME)/.config
-USER_PLUGIN_DIR ?= $(HOME)/.local/lib/cptv-vlc/plugins
+USER_LIB_DIR    ?= $(HOME)/.local/lib/cptv-vlc
+USER_PLUGIN_DIR ?= $(USER_LIB_DIR)/plugins
 VLC_PATH        ?= $(shell command -v vlc 2>/dev/null || echo vlc)
 # macOS: VLC 3 has no per-user plugin dir, so a LaunchAgent sets VLC_PLUGIN_PATH
 # in the login session (launchctl setenv); every VLC started from Finder/Dock
@@ -142,7 +165,7 @@ MAC_PLUGIN_DIR  ?= $(HOME)/Library/Application Support/cptv-vlc/plugins
 AGENT_LABEL     := nz.org.cacophony.cptv-vlc
 AGENT_PLIST     := $(HOME)/Library/LaunchAgents/$(AGENT_LABEL).plist
 
-install-user: $(PLUGIN)
+install-user: $(PLUGIN) $(LINUX_EXTRAS)
 ifeq ($(UNAME_S),Darwin)
 	mkdir -p "$(MAC_PLUGIN_DIR)" "$(HOME)/Library/LaunchAgents"
 	cp $(PLUGIN) "$(MAC_PLUGIN_DIR)/"
@@ -162,7 +185,12 @@ else
 	-update-mime-database "$(XDG_DATA_HOME)/mime"
 	-update-desktop-database "$(XDG_DATA_HOME)/applications"
 	xdg-mime default vlc-cptv.desktop video/x-cptv
-	@echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin."
+	install -d "$(USER_LIB_DIR)" "$(XDG_DATA_HOME)/thumbnailers"
+	install -m 0755 $(THUMBNAILER) "$(USER_LIB_DIR)/"
+	sed 's|@BIN@|$(USER_LIB_DIR)/cptv-thumbnailer|g' packaging/linux/cptv.thumbnailer.in \
+	    > "$(XDG_DATA_HOME)/thumbnailers/cptv.thumbnailer"
+	@echo "Done: double-clicking a .cptv file now opens it in VLC with the CPTV plugin,"
+	@echo "and file managers can show .cptv thumbnails (GNOME may need 'sudo make install')."
 endif
 
 uninstall-user:
@@ -173,6 +201,8 @@ ifeq ($(UNAME_S),Darwin)
 	rm -rf "$(HOME)/Library/Application Support/cptv-vlc"
 else
 	rm -f "$(USER_PLUGIN_DIR)/$(notdir $(PLUGIN))" \
+	      "$(USER_LIB_DIR)/cptv-thumbnailer" \
+	      "$(XDG_DATA_HOME)/thumbnailers/cptv.thumbnailer" \
 	      "$(XDG_DATA_HOME)/applications/vlc-cptv.desktop" \
 	      "$(XDG_DATA_HOME)/mime/packages/cptv.xml"
 	-update-mime-database "$(XDG_DATA_HOME)/mime"
@@ -236,9 +266,12 @@ else
 	@echo ".cptv files now open with VLC"
 endif
 
-test: $(PLUGIN)
+test: $(PLUGIN) $(THUMBNAILER)
 	$(CARGO) test --release
 	./scripts/smoke-test.sh $(PLUGIN) "$$(./scripts/fixtures-dir.sh)/20240507-074536.cptv" "$(VLC_BIN)"
+	$(THUMBNAILER) -s 256 "$$(./scripts/fixtures-dir.sh)/20240507-074536.cptv" $(BUILD)/test-thumbnail.png
+	@[ "$$(head -c 8 $(BUILD)/test-thumbnail.png | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] \
+	    && echo "OK: thumbnailer wrote a PNG" || { echo "FAIL: thumbnailer output isn't a PNG" >&2; exit 1; }
 
 clean:
 	rm -rf $(BUILD)

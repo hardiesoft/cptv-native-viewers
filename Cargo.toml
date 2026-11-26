@@ -14,6 +14,17 @@ crate-type = ["staticlib", "rlib"]
 codec = { git = "https://github.com/TheCacophonyProject/cptv-tools", rev = "07e68ff5edf491bfea11cc72f0575358076de125" }
 flate2 = "1.0.33"
 colorous = "1.0.10"
+png = { version = "0.17", optional = true }
+
+[features]
+# Builds the freedesktop thumbnailer (`cargo build --release --features thumbnailer`).
+# Off by default so the VLC plugin's staticlib doesn't pull in a PNG encoder.
+thumbnailer = ["dep:png"]
+
+[[bin]]
+name = "cptv-thumbnailer"
+path = "src/bin/cptv-thumbnailer.rs"
+required-features = ["thumbnailer"]
 
 [profile.release]
 opt-level = 3

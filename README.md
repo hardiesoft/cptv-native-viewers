@@ -15,6 +15,7 @@ src/lib.rs         probe, open via read/seek callbacks, normalise + upscale + co
 src/source.rs      frame sources: streaming (decode on demand) or in memory
 src/palette.rs     colour maps (viridis, inferno, magma, plasma, turbo, ironbow, grey)
 tests/common/      tiny CPTV encoder for synthetic test clips
+src/bin/           cptv-thumbnailer: freedesktop thumbnailer for Linux file managers
 macos/quicklook/   macOS Quick Look thumbnail + preview extensions (Swift, same Rust core)
 ```
 
@@ -47,7 +48,8 @@ You need Rust (stable), a C compiler, `git`, and VLC 3.0.x.
 
 ```bash
 make            # → build/libcptv_plugin.so (Linux) or build/libcptv_plugin.dylib (macOS)
-make test       # Rust tests + a headless VLC run that checks frames come out
+make test       # Rust tests, a headless VLC run that checks frames come out,
+                # and a check that the thumbnailer writes a PNG
 ```
 
 The tests use the sample `.cptv` files from cptv-tools (`cptv-codec-rs/tests/fixtures`),
@@ -80,6 +82,9 @@ This command:
 - adds a hidden launcher, "VLC (CPTV thermal video)" (`~/.local/share/applications/vlc-cptv.desktop`),
   which runs VLC with `VLC_PLUGIN_PATH` pointing at the plugin
 - makes that launcher the default app for `.cptv` files
+- installs the file-manager thumbnailer (see [Linux file-manager
+  thumbnails](#linux-file-manager-thumbnails)) in `~/.local/lib/cptv-vlc/` and
+  `~/.local/share/thumbnailers/`
 
 To undo it, run `make uninstall-user`.
 
@@ -89,12 +94,39 @@ running, because that copy may not have the plugin loaded.
 ### Linux, system-wide
 
 ```bash
-sudo make install     # copies into /usr/lib/<triplet>/vlc/plugins/demux and refreshes VLC's plugin cache
+sudo make install     # copies into /usr/lib/<triplet>/vlc/plugins/demux and refreshes VLC's plugin cache,
+                      # and installs the thumbnailer into /usr/local (set PREFIX=... to change)
 make associate        # .cptv → MIME type, and vlc.desktop as the default app
 ```
 
 This works for any VLC launch, including the command line and "Open With". It won't work
 with Snap or Flatpak builds of VLC, which can't see host plugins. Use the distro package.
+
+### Linux file-manager thumbnails
+
+`cptv-thumbnailer` (in `src/bin/`) is a
+[freedesktop thumbnailer](https://specifications.freedesktop.org/thumbnail-spec/latest/). It's
+registered for `video/x-cptv` by a `cptv.thumbnailer` file and run as
+`cptv-thumbnailer -s SIZE INPUT OUTPUT.png`. GNOME Files (Nautilus), Nemo and Caja use it, and
+so does Thunar through tumbler. KDE's Dolphin doesn't support this format; it would need a
+separate KIO thumbnail plugin.
+
+It draws the same frame as the macOS thumbnails, about a second in, with that frame's contrast
+stretched, so it never reads through the whole file. That takes about 10–60 ms per file. To
+build it on its own, run `make thumbnailer`, which runs
+`cargo build --release --features thumbnailer`.
+
+Both `make install-user` and `sudo make install` install it, but they need the `video/x-cptv`
+MIME type from `make install-user` or `make associate`. Recent GNOME versions run thumbnailers
+in a bubblewrap sandbox that may only expose system folders, so if thumbnails don't appear in
+GNOME Files after `make install-user`, use `sudo make install` too. That puts it in
+`/usr/local`.
+
+GNOME remembers failed thumbnails and won't retry those files. After changing anything, clear
+`~/.cache/thumbnails/fail/` and restart the file manager (`nautilus -q`).
+
+The macOS build and tests have run this code, but it hasn't been tried in a Linux file manager
+yet.
 
 ### macOS, no admin rights (recommended)
 
