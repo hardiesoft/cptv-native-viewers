@@ -36,11 +36,16 @@ UNAME_S     := $(shell uname -s)
 CARGO       ?= cargo
 CC          ?= cc
 
-RUST_LIB    := target/release/libcptv_vlc.a
+# Cross/per-architecture builds (used by scripts/package-macos.sh):
+#   make RUST_TARGET=x86_64-apple-darwin ARCH=x86_64 BUILD=build/x86_64
+RUST_TARGET ?=
+RUST_OUT    := target/$(if $(RUST_TARGET),$(RUST_TARGET)/)release
+CARGO_FLAGS := --release $(if $(RUST_TARGET),--target $(RUST_TARGET))
+RUST_LIB    := $(RUST_OUT)/libcptv_native_viewers.a
 # Freedesktop thumbnailer (Linux file managers); also builds and tests on macOS.
-THUMBNAILER := target/release/cptv-thumbnailer
+THUMBNAILER := $(RUST_OUT)/cptv-thumbnailer
 PREFIX      ?= /usr/local
-BUILD       := build
+BUILD       ?= build
 
 ifneq ($(shell pkg-config --exists vlc-plugin 2>/dev/null && echo yes),)
   VLC_INCLUDE ?= $(shell pkg-config --variable=includedir vlc-plugin)/vlc/plugins
@@ -57,8 +62,13 @@ ifeq ($(UNAME_S),Darwin)
   PLUGIN      := $(BUILD)/libcptv_plugin.dylib
   VLC_APP     ?= /Applications/VLC.app
   PLUGIN_DIR  ?= $(VLC_APP)/Contents/MacOS/plugins
+  # Oldest macOS the plugin runs on (arm64 is 11.0 at least regardless). Cargo
+  # and cc both read this, so the Rust and C halves agree.
+  export MACOSX_DEPLOYMENT_TARGET ?= 10.15
+  ARCH        ?=
+  CFLAGS_ALL  += $(if $(ARCH),-arch $(ARCH))
   # Symbols from libvlccore are resolved by VLC at load time.
-  LINK_FLAGS   = -dynamiclib -undefined dynamic_lookup \
+  LINK_FLAGS   = $(if $(ARCH),-arch $(ARCH)) -dynamiclib -undefined dynamic_lookup \
                  -Wl,-exported_symbol,_vlc_entry__$(VLC_ABI) \
                  -Wl,-dead_strip -Wl,-x \
                  -framework CoreFoundation -lSystem -lc -lm -liconv
@@ -106,7 +116,8 @@ ifneq ($(findstring t64,$(VLC_ABI)),)
 endif
 
 .PHONY: all rust thumbnailer install uninstall install-user uninstall-user associate test clean distclean \
-        quicklook install-quicklook uninstall-quicklook install-thumbnailer uninstall-thumbnailer
+        quicklook install-quicklook uninstall-quicklook install-thumbnailer uninstall-thumbnailer \
+        package-macos package-linux
 
 all: $(PLUGIN) $(LINUX_EXTRAS)
 
@@ -114,12 +125,12 @@ $(HEADERS_STAMP):
 	./scripts/fetch-vlc-headers.sh $(VLC_VERSION) third_party/vlc-$(VLC_VERSION)
 
 rust:
-	$(CARGO) build --release --lib
+	$(CARGO) build $(CARGO_FLAGS) --lib
 
 $(RUST_LIB): rust
 
 thumbnailer:
-	$(CARGO) build --release --features thumbnailer --bin cptv-thumbnailer
+	$(CARGO) build $(CARGO_FLAGS) --features thumbnailer --bin cptv-thumbnailer
 
 $(THUMBNAILER): thumbnailer
 
@@ -135,6 +146,15 @@ endif
 
 $(BUILD):
 	mkdir -p $@
+
+# --- Release packages (see .github/workflows/release.yml) ---------------------
+#   make package-macos           universal .pkg installer in dist/
+#   make package-linux FORMAT=deb|rpm   (on the target distro; needs nfpm)
+package-macos:
+	./scripts/package-macos.sh
+
+package-linux: $(PLUGIN) $(THUMBNAILER)
+	./scripts/package-linux.sh $(FORMAT) "$(PLUGIN)" "$(THUMBNAILER)" "$(PLUGIN_DIR)"
 
 install: $(INSTALL_PREREQS)
 	$(call need_built,$(PLUGIN))
@@ -182,14 +202,14 @@ uninstall-thumbnailer:
 # --- Per-user install: no root needed, VLC itself untouched -------------------
 XDG_DATA_HOME   ?= $(HOME)/.local/share
 XDG_CONFIG_HOME ?= $(HOME)/.config
-USER_LIB_DIR    ?= $(HOME)/.local/lib/cptv-vlc
+USER_LIB_DIR    ?= $(HOME)/.local/lib/cptv-native-viewers
 USER_PLUGIN_DIR ?= $(USER_LIB_DIR)/plugins
 VLC_PATH        ?= $(shell command -v vlc 2>/dev/null || echo vlc)
 # macOS: VLC 3 has no per-user plugin dir, so a LaunchAgent sets VLC_PLUGIN_PATH
 # in the login session (launchctl setenv); every VLC started from Finder/Dock
 # then loads the plugin, and .cptv files open in the one normal VLC.
-MAC_PLUGIN_DIR  ?= $(HOME)/Library/Application Support/cptv-vlc/plugins
-AGENT_LABEL     := nz.org.cacophony.cptv-vlc
+MAC_PLUGIN_DIR  ?= $(HOME)/Library/Application Support/cptv-native-viewers/plugins
+AGENT_LABEL     := nz.org.cacophony.cptv-native-viewers
 AGENT_PLIST     := $(HOME)/Library/LaunchAgents/$(AGENT_LABEL).plist
 
 install-user: $(PLUGIN) $(LINUX_EXTRAS)
@@ -235,7 +255,7 @@ ifeq ($(UNAME_S),Darwin)
 	-launchctl bootout gui/$$(id -u) "$(AGENT_PLIST)" 2>/dev/null
 	-launchctl unsetenv VLC_PLUGIN_PATH
 	rm -f "$(AGENT_PLIST)"
-	rm -rf "$(HOME)/Library/Application Support/cptv-vlc"
+	rm -rf "$(HOME)/Library/Application Support/cptv-native-viewers"
 else
 	rm -f "$(USER_PLUGIN_DIR)/$(notdir $(PLUGIN))" \
 	      "$(USER_LIB_DIR)/cptv-thumbnailer" \
@@ -311,7 +331,7 @@ test: $(PLUGIN) $(THUMBNAILER)
 	    && echo "OK: thumbnailer wrote a PNG" || { echo "FAIL: thumbnailer output isn't a PNG" >&2; exit 1; }
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) dist
 	$(CARGO) clean
 
 distclean: clean

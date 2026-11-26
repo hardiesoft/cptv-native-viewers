@@ -1,7 +1,58 @@
-# cptv-vlc
+# cptv-native-viewers
 
-A VLC 3.0 plugin that plays [Cacophony Project](https://cacophony.org.nz) **CPTV** thermal
-video files, so you can double-click a `.cptv` file and watch it in VLC on Linux or macOS.
+Native desktop support for [Cacophony Project](https://cacophony.org.nz) **CPTV** thermal
+video files on macOS and Linux:
+
+- **VLC plugin** (macOS and Linux): double-click a `.cptv` file to watch it in VLC 3.0, with
+  seeking, a choice of colour palettes, and the recording's metadata.
+- **Finder thumbnails and spacebar previews** (macOS 13+): Quick Look extensions show a
+  thumbnail for each `.cptv` file and play a preview when you press Space.
+- **File-manager thumbnails** (Linux): a freedesktop thumbnailer for GNOME Files, Nemo, Caja
+  and Thunar.
+
+## Install
+
+Download the installer for your system from the
+[latest release](https://github.com/hardiesoft/cptv-native-viewers/releases/latest). You need
+[VLC](https://www.videolan.org/vlc/) 3.0 installed too.
+
+| System | File | Installs |
+|---|---|---|
+| macOS 10.15+ (Apple silicon and Intel) | `cptv-native-viewers-<version>-macos.pkg` | VLC plugin; Finder thumbnails and previews on macOS 13+ |
+| Ubuntu 24.04+, Debian 13+ (x86_64) | `cptv-native-viewers_<version>_amd64.deb` | VLC plugin, file-manager thumbnails |
+| Fedora (x86_64) | `cptv-native-viewers-<version>-1.x86_64.rpm` | VLC plugin, file-manager thumbnails |
+
+**macOS:** double-click the `.pkg` and follow the installer. If macOS says it can't check
+the package for malicious software (releases aren't signed with an Apple Developer ID yet),
+open **System Settings → Privacy & Security**, click **Open Anyway** next to the message, and
+run it again. Quit and reopen VLC if it was running. The installer has two parts, which you
+can choose between under **Customize**:
+
+- **VLC plugin** goes in `/Library/Application Support/cptv-native-viewers/`. A login item puts it on
+  VLC's plugin path for every user, and `.cptv` files are set to open in VLC. VLC.app isn't
+  changed, so VLC can update itself as normal.
+- **Finder thumbnails and previews** installs `/Applications/CPTV Quick Look.app` (macOS 13+).
+
+To remove it, run:
+
+```bash
+sudo "/Library/Application Support/cptv-native-viewers/uninstall.sh"
+```
+
+**Ubuntu and Debian:** double-click the `.deb` to open it in App Center (or Software), then
+click **Install**, or run `sudo apt install ./cptv-native-viewers_*.deb`. **Fedora:**
+double-click the `.rpm`, or run `sudo dnf install ./cptv-native-viewers-*.rpm`. Both put the
+plugin in the system VLC's own plugin folder, so any VLC can play `.cptv` files. They also add
+the thumbnailer (in `/usr/bin`, where GNOME's sandbox allows it), the `video/x-cptv` file type,
+and a "VLC (CPTV thermal video)" entry for opening the files. Remove it with
+`sudo apt remove cptv-native-viewers` or `sudo dnf remove cptv-native-viewers`. The packages
+work with your distribution's VLC, not the Snap or Flatpak versions, which can't load
+outside plugins.
+
+If double-clicking a `.cptv` file opens something else, right-click it, choose **Open With**,
+pick **VLC** (on Linux, **VLC (CPTV thermal video)**), and make it the default.
+
+## How it works
 
 Decoding uses the upstream Rust decoder from
 [cptv-tools](https://github.com/TheCacophonyProject/cptv-tools) (`cptv-codec-rs`). VLC plugins
@@ -17,6 +68,9 @@ src/palette.rs     colour maps (viridis, inferno, magma, plasma, turbo, ironbow,
 tests/common/      tiny CPTV encoder for synthetic test clips
 src/bin/           cptv-thumbnailer: freedesktop thumbnailer for Linux file managers
 macos/quicklook/   macOS Quick Look thumbnail + preview extensions (Swift, same Rust core)
+packaging/         macOS installer (pkg/), LaunchAgent, Linux MIME/desktop/thumbnailer files
+scripts/           packaging (package-macos.sh, package-linux.sh) and test helpers
+.github/workflows/ release builds
 ```
 
 The Rust code reads the file straight from VLC's stream. How it gets frames depends on the
@@ -42,9 +96,10 @@ With clip normalisation (the default), the brightness range comes from the min/m
 header. If the header doesn't have them, the plugin reads through every frame once when the
 file opens to find them, but doesn't keep the frames.
 
-## Build
+## Build from source
 
-You need Rust (stable), a C compiler, `git`, and VLC 3.0.x.
+You need Rust (stable), a C compiler, `git`, and VLC 3.0.x. On macOS you also need Xcode for
+the Quick Look extensions.
 
 ```bash
 make            # → build/libcptv_plugin.so (Linux) or build/libcptv_plugin.dylib (macOS)
@@ -67,9 +122,13 @@ builds use `vlc_entry__3_0_0f`. Debian/Ubuntu's 64-bit `time_t` builds use `…3
 Makefile finds the right tag by reading your installed `libvlccore`. To set it yourself, use
 `make VLC_ABI=3_0_0f`.
 
-## Install and make double-click work
+## Install from source
 
-### Linux, no root (recommended)
+These install what you've built, for development or if you'd rather not use a release
+package. Don't combine them with a release package; the macOS installer replaces a per-user
+`make install-user` / `make install-quicklook` install it finds.
+
+### Linux, no root
 
 ```bash
 make install-user
@@ -77,12 +136,12 @@ make install-user
 
 This command:
 
-- puts the plugin in `~/.local/lib/cptv-vlc/plugins/`
+- puts the plugin in `~/.local/lib/cptv-native-viewers/plugins/`
 - registers a `video/x-cptv` MIME type for `*.cptv` in `~/.local/share/mime`
 - adds a hidden launcher, "VLC (CPTV thermal video)" (`~/.local/share/applications/vlc-cptv.desktop`),
   which runs VLC with `VLC_PLUGIN_PATH` pointing at the plugin
 - makes that launcher the default app for `.cptv` files
-- installs the file-manager thumbnailer in `~/.local/lib/cptv-vlc/` and
+- installs the file-manager thumbnailer in `~/.local/lib/cptv-native-viewers/` and
   `~/.local/share/thumbnailers/`, but only on desktops that don't sandbox thumbnailers.
   On GNOME and Cinnamon (any system with `bwrap`), it installs nothing for thumbnails and
   tells you to run `sudo make install-thumbnailer` instead. See [Linux file-manager
@@ -160,7 +219,7 @@ On Ubuntu with GNOME Files 50, after `sudo make install-thumbnailer` and a Files
 Not yet tried: the per-user install on a file manager that doesn't sandbox thumbnailers (for
 example, Thunar).
 
-### macOS, no admin rights (recommended)
+### macOS, no admin rights
 
 ```bash
 make install-user
@@ -168,8 +227,8 @@ make install-user
 
 This command:
 
-- puts the plugin in `~/Library/Application Support/cptv-vlc/plugins/`
-- adds a LaunchAgent (`~/Library/LaunchAgents/nz.org.cacophony.cptv-vlc.plist`) that runs
+- puts the plugin in `~/Library/Application Support/cptv-native-viewers/plugins/`
+- adds a LaunchAgent (`~/Library/LaunchAgents/nz.org.cacophony.cptv-native-viewers.plist`) that runs
   `launchctl setenv VLC_PLUGIN_PATH …` at each login, and runs it now. VLC 3 has no per-user
   plugin folder, but every app started from Finder, the Dock or Spotlight inherits that
   variable, so your normal VLC loads the plugin. VLC still loads its own plugins too.
@@ -197,7 +256,9 @@ without re-signing. A VLC update replaces the app bundle and removes the plugin.
 
 Notes for macOS:
 
-- Build on the same architecture as your VLC.app (arm64 or x86_64).
+- `make` builds for this Mac's architecture. For an Intel VLC on Apple silicon, use
+  `make ARCH=x86_64 RUST_TARGET=x86_64-apple-darwin BUILD=build/x86_64`, or build the
+  universal installer with `make package-macos`.
 - To run once without installing anything:
   `VLC_PLUGIN_PATH=$PWD/build /Applications/VLC.app/Contents/MacOS/VLC file.cptv`.
 - To use a VLC.app somewhere else, set `VLC_APP=/path/to/VLC.app`.
@@ -232,12 +293,62 @@ to match the extensions, so Finder now shows the kind as "CPTV thermal video". V
 app that opens the files. To undo it, run `make uninstall-quicklook`.
 
 It's built with plain `swiftc` (no Xcode project, but Xcode must be installed) and signed ad
-hoc, which is enough on your own Mac. To give it to other people without Gatekeeper warnings,
-it would need signing with an Apple Developer ID and notarizing.
+hoc, which is enough on your own Mac. The release installer can sign it with a Developer ID
+(see [Releases](#releases)).
 
 If thumbnails don't appear, run `qlmanage -r cache` and reopen the Finder window. If a file
 type was previously registered differently, Quick Look's thumbnail agent can keep using the
 old type until you log out and back in.
+
+## Releases
+
+`.github/workflows/release.yml` builds and tests all three installers:
+
+- **macOS** (`macos-15` runner): `scripts/package-macos.sh` builds the plugin, the Quick Look
+  app and a small helper for both arm64 and x86_64, merges them with `lipo`, and wraps them in
+  a `.pkg` with `pkgbuild`/`productbuild`. The plugin needs macOS 10.15 (11 on Apple silicon),
+  and Quick Look needs 13.
+- **Debian/Ubuntu** (`ubuntu-24.04`, x86_64): built against Ubuntu's VLC, so it uses the
+  `3_0_0ft64` ABI, and packaged with [nfpm](https://nfpm.goreleaser.com). The job then
+  installs the `.deb` and checks that VLC plays a sample with it.
+- **Fedora** (`fedora:42` container, x86_64): the same with Fedora's VLC (`3_0_0f`) as an
+  `.rpm`.
+
+To publish a release, set `version` in `Cargo.toml`, commit, and push a matching tag:
+
+```bash
+git tag v0.1.0
+```
+
+```bash
+git push origin v0.1.0
+```
+
+The workflow then creates a GitHub Release with the three files. Running it by hand
+(**Actions → Release → Run workflow**) builds the same files with a `-dev.<commit>` version and
+attaches them to the run as artifacts, without releasing.
+
+You can build the packages locally too: `make package-macos` on a Mac, or
+`make package-linux FORMAT=deb` (or `rpm`) on the target distro with nfpm installed
+(`scripts/install-nfpm.sh 2.48.0`). The output goes in `dist/`.
+
+### Signing the macOS installer
+
+Without signing, the `.pkg` and everything in it are signed ad hoc, so macOS asks users to
+approve the installer under **Privacy & Security** first. To sign and notarize it, which
+needs a paid Apple Developer account, add these repository secrets:
+
+| Secret | Value |
+|---|---|
+| `MACOS_CERTIFICATES_P12` | base64 of a `.p12` export holding both your **Developer ID Application** and **Developer ID Installer** certificates and keys |
+| `MACOS_CERTIFICATES_PASSWORD` | the `.p12`'s password |
+| `APPLE_ID` | your Apple ID email |
+| `APPLE_TEAM_ID` | your 10-character team ID |
+| `APPLE_APP_PASSWORD` | an [app-specific password](https://support.apple.com/102654) for that Apple ID |
+
+With those set, the code is signed with the hardened runtime, the `.pkg` is signed, and it's
+notarized and stapled. The signing path hasn't been run yet, because it needs real
+certificates.
 
 ## Options
 

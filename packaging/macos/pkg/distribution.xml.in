@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>CPTV Native Viewers</title>
+    <organization>nz.org.cacophony</organization>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <volume-check>
+        <allowed-os-versions><os-version min="10.15"/></allowed-os-versions>
+    </volume-check>
+    <installation-check script="checkVLC()"/>
+    <script><![CDATA[
+function checkVLC() {
+    if (!system.files.fileExistsAtPath('/Applications/VLC.app')) {
+        my.result.type = 'Warning';
+        my.result.title = 'VLC is not installed';
+        my.result.message = 'This installs a plugin for VLC, which wasn\'t found in your ' +
+            'Applications folder. You can install VLC (videolan.org) before or after this.';
+        return false;
+    }
+    return true;
+}
+function quickLookSupported() {
+    return system.compareVersions(system.version.ProductVersion, '13.0') >= 0;
+}
+    ]]></script>
+    <choices-outline>
+        <line choice="plugin"/>
+        <line choice="quicklook"/>
+    </choices-outline>
+    <choice id="plugin" title="VLC plugin" enabled="false" selected="true"
+            description="Lets VLC play .cptv files, and makes VLC open them when you double-click.">
+        <pkg-ref id="nz.org.cacophony.cptv-native-viewers.plugin"/>
+    </choice>
+    <choice id="quicklook" title="Finder thumbnails and previews"
+            enabled="quickLookSupported()" selected="quickLookSupported()"
+            description="Shows .cptv thumbnails in Finder, and plays a preview when you press Space. Needs macOS 13 or later.">
+        <pkg-ref id="nz.org.cacophony.cptv-native-viewers.quicklook"/>
+    </choice>
+    <pkg-ref id="nz.org.cacophony.cptv-native-viewers.plugin" version="@VERSION@" onConclusion="none">plugin.pkg</pkg-ref>
+    <pkg-ref id="nz.org.cacophony.cptv-native-viewers.quicklook" version="@VERSION@" onConclusion="none">quicklook.pkg</pkg-ref>
+</installer-gui-script>

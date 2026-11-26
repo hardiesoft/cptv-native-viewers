@@ -1,0 +1,38 @@
+#!/bin/sh
+# postinstall for the Quick Look component (runs as root).
+. "$(dirname "$0")/common.sh"
+
+if ! have_user; then
+    log "no one logged in; Quick Look picks up the app when it's next scanned"
+    exit 0
+fi
+
+# A per-user copy from `make install-quicklook` has the same bundle IDs.
+OLD="$CONSOLE_HOME/Applications/CPTV Quick Look.app"
+if [ -n "$CONSOLE_HOME" ] && [ -d "$OLD" ]; then
+    log "removing per-user copy $OLD"
+    for e in $QL_EXTS; do as_user pluginkit -r "$OLD/Contents/PlugIns/$e.appex" 2>/dev/null; done
+    as_user "$LSREGISTER" -u "$OLD" 2>/dev/null
+    rm -rf "$OLD"
+fi
+
+as_user "$LSREGISTER" -f -R "$QL_APP"
+# pkd can process an old copy's removal after we register the new one, so
+# register, wait, check, and retry.
+i=0
+while [ $i -lt 10 ]; do
+    for e in $QL_EXTS; do as_user pluginkit -a "$QL_APP/Contents/PlugIns/$e.appex"; done
+    sleep 1
+    if as_user pluginkit -m -i nz.org.cacophony.cptv-quicklook.thumbnail | grep -q thumbnail &&
+       as_user pluginkit -m -i nz.org.cacophony.cptv-quicklook.preview | grep -q preview; then
+        break
+    fi
+    i=$((i + 1))
+done
+[ $i -lt 10 ] || log "Quick Look extensions didn't register; they should after logging out and in"
+
+# The app declares the .cptv file type, so point that type (back) at VLC.
+as_user "$SUPPORT/cptv-set-default" cptv org.videolan.vlc || log "couldn't make VLC the default app for .cptv"
+as_user qlmanage -r >/dev/null 2>&1
+as_user qlmanage -r cache >/dev/null 2>&1
+exit 0

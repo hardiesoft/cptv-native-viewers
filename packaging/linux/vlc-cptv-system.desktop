@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VLC (CPTV thermal video)
+GenericName=Thermal video player
+Comment=Play Cacophony Project CPTV thermal recordings in VLC
+Icon=vlc
+TryExec=vlc
+# The packaged plugin is in VLC's own plugin dir, so any VLC can play .cptv
+# files and an already-running one can be reused.
+Exec=vlc --started-from-file %U
+Terminal=false
+NoDisplay=true
+MimeType=video/x-cptv;
+Categories=AudioVideo;Player;Video;

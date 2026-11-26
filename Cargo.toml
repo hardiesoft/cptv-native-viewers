@@ -1,12 +1,12 @@
 [package]
-name = "cptv-vlc"
+name = "cptv-native-viewers"
 version = "0.1.0"
 edition = "2021"
-description = "VLC demux plugin for Cacophony Project CPTV thermal video files"
+description = "Native viewers for Cacophony Project CPTV thermal video files: VLC plugin, macOS Quick Look and Linux thumbnailer core"
 license = "LGPL-2.1-or-later"
 
 [lib]
-name = "cptv_vlc"
+name = "cptv_native_viewers"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]

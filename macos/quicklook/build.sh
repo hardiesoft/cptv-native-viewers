@@ -2,7 +2,13 @@
 # Build "CPTV Quick Look.app": a host app declaring the .cptv file type, with a
 # Quick Look thumbnail extension and a preview extension inside. Built with
 # plain swiftc (no Xcode project) and signed ad hoc to run on this Mac.
-#   usage: build.sh <libcptv_vlc.a> <output .app>
+#   usage: build.sh <libcptv_native_viewers.a> <output .app>
+# Environment:
+#   ARCHS      architectures to build, e.g. "arm64 x86_64" for a universal app
+#              (default: this Mac's). The Rust library must contain them all
+#              (lipo -create the per-target libcptv_native_viewers.a files).
+#   VERSION    bundle version (default: from Cargo.toml)
+#   APP_ICON   .icns to use (default: VLC's, if VLC.app is installed)
 set -eu
 RUST_LIB="$1"
 APP="$2"
@@ -11,13 +17,30 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 BUNDLE_ID=nz.org.cacophony.cptv-quicklook
 UTI=nz.org.cacophony.cptv
 MIN_OS=13.0
-VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n1)"
-ARCH="$(uname -m)"
+VERSION="${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n1)}"
+ARCHS="${ARCHS:-$(uname -m)}"
+APP_ICON="${APP_ICON:-/Applications/VLC.app/Contents/Resources/VLC.icns}"
 
-SWIFTC="xcrun swiftc -target $ARCH-apple-macos$MIN_OS -swift-version 5 -O \
-    -import-objc-header $ROOT/vlc/cptv_core.h"
 # Rust's std needs these when linking the staticlib.
 RUST_LINK="$RUST_LIB -framework CoreFoundation -liconv"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# swiftc for each of $ARCHS, then lipo the results into one executable.
+#   swiftc_all <output> <swiftc args...>
+swiftc_all() {
+    out="$1"; shift
+    slices=""
+    for arch in $ARCHS; do
+        # No spaces in slice names ("CPTV Quick Look"): $slices is word-split below.
+        slice="$TMP/$(basename "$out" | tr -c 'A-Za-z0-9\n' _).$arch"
+        xcrun swiftc -target "$arch-apple-macos$MIN_OS" -swift-version 5 -O "$@" -o "$slice"
+        slices="$slices $slice"
+    done
+    # shellcheck disable=SC2086
+    lipo -create $slices -output "$out"
+}
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/PlugIns" "$APP/Contents/Resources"
@@ -31,8 +54,8 @@ plist_common() {  # <name> <bundle id> <executable> <package type>
 	<key>CFBundleExecutable</key><string>$3</string>
 	<key>CFBundlePackageType</key><string>$4</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleShortVersionString</key><string>$VERSION</string>
-	<key>CFBundleVersion</key><string>$VERSION</string>
+	<key>CFBundleShortVersionString</key><string>${VERSION%%-*}</string>
+	<key>CFBundleVersion</key><string>${VERSION%%-*}</string>
 	<key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
 EOF
 }
@@ -44,10 +67,11 @@ build_ext() {  # <name> <bundle suffix> <extension point> <principal class> <fra
     ext="$APP/Contents/PlugIns/$name.appex"
     mkdir -p "$ext/Contents/MacOS"
     # shellcheck disable=SC2086
-    $SWIFTC -module-name "$name" -application-extension -parse-as-library \
+    swiftc_all "$ext/Contents/MacOS/$name" \
+        -import-objc-header "$ROOT/vlc/cptv_core.h" \
+        -module-name "$name" -application-extension -parse-as-library \
         -Xlinker -e -Xlinker _NSExtensionMain \
-        "$HERE/Shared/CPTVClip.swift" "$@" $RUST_LINK $frameworks \
-        -o "$ext/Contents/MacOS/$name"
+        "$HERE/Shared/CPTVClip.swift" "$@" $RUST_LINK $frameworks
     {
         echo '<?xml version="1.0" encoding="UTF-8"?>'
         echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -81,11 +105,10 @@ build_ext CPTVPreview preview com.apple.quicklook.preview PreviewViewController 
     "$HERE/Preview/PreviewViewController.swift"
 
 # --- Host app -----------------------------------------------------------------
-xcrun swiftc -target "$ARCH-apple-macos$MIN_OS" -swift-version 5 -O \
-    "$HERE/App/main.swift" -o "$APP/Contents/MacOS/CPTV Quick Look"
-for icns in /Applications/VLC.app/Contents/Resources/VLC.icns; do
-    [ -f "$icns" ] && cp "$icns" "$APP/Contents/Resources/AppIcon.icns"
-done
+swiftc_all "$APP/Contents/MacOS/CPTV Quick Look" "$HERE/App/main.swift"
+if [ -f "$APP_ICON" ]; then
+    cp "$APP_ICON" "$APP/Contents/Resources/AppIcon.icns"
+fi
 {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'

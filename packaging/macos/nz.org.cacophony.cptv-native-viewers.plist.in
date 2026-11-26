@@ -5,7 +5,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>nz.org.cacophony.cptv-vlc</string>
+	<string>nz.org.cacophony.cptv-native-viewers</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/launchctl</string>

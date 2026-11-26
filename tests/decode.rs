@@ -3,8 +3,8 @@ mod common;
 use std::time::Instant;
 
 use common::{fixture, marker, Synth};
-use cptv_vlc::palette::Palette;
-use cptv_vlc::{probe, Clip, Load, Normalize, Render};
+use cptv_native_viewers::palette::Palette;
+use cptv_native_viewers::{probe, Clip, Load, Normalize, Render};
 
 
 fn open(data: Vec<u8>, norm: Normalize) -> Clip {

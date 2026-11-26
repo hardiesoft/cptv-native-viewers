@@ -10,9 +10,9 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use cptv_vlc::palette::Palette;
-use cptv_vlc::source::{Opener, Reader};
-use cptv_vlc::{Clip, Load, Normalize, Render};
+use cptv_native_viewers::palette::Palette;
+use cptv_native_viewers::source::{Opener, Reader};
+use cptv_native_viewers::{Clip, Load, Normalize, Render};
 
 /// Sensor width; frames are 160×120.
 const SENSOR_W: usize = 160;

@@ -1,0 +1,28 @@
+#!/bin/sh
+# postinstall for the VLC plugin component (runs as root).
+. "$(dirname "$0")/common.sh"
+
+chown root:wheel "$AGENT"
+chmod 644 "$AGENT"
+
+if ! have_user; then
+    log "no one logged in; the plugin takes effect at next login"
+    exit 0
+fi
+
+# A per-user copy from `make install-user` uses the same LaunchAgent label and
+# would fight over VLC_PLUGIN_PATH, so replace it with this system-wide one.
+if [ -n "$CONSOLE_HOME" ] && [ -f "$CONSOLE_HOME/Library/LaunchAgents/$LABEL.plist" ]; then
+    log "removing per-user install from $CONSOLE_HOME"
+    rm -f "$CONSOLE_HOME/Library/LaunchAgents/$LABEL.plist"
+    rm -rf "$CONSOLE_HOME/Library/Application Support/cptv-native-viewers"
+fi
+
+# (Re)load the agent now rather than at next login; it runs
+# `launchctl setenv VLC_PLUGIN_PATH ...` in the user's session.
+launchctl bootout "gui/$CONSOLE_UID/$LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$CONSOLE_UID" "$AGENT" ||
+    launchctl asuser "$CONSOLE_UID" launchctl setenv VLC_PLUGIN_PATH "$PLUGIN_DIR"
+
+as_user "$SUPPORT/cptv-set-default" cptv org.videolan.vlc || log "couldn't make VLC the default app for .cptv"
+exit 0
