@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VLC (CPTV thermal video)
+GenericName=Thermal video player
+Comment=Play Cacophony Project CPTV thermal recordings in VLC
+Icon=vlc
+TryExec=@VLC@
+# VLC_PLUGIN_PATH lets VLC load the CPTV plugin without installing it system-wide.
+# (--started-from-file is deliberately omitted so a fresh VLC is started that
+# has the plugin loaded, rather than reusing an already-running instance.)
+Exec=env VLC_PLUGIN_PATH=@PLUGIN_DIR@ @VLC@ %U
+Terminal=false
+NoDisplay=true
+MimeType=video/x-cptv;
+Categories=AudioVideo;Player;Video;

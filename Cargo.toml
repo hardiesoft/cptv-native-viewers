@@ -1,0 +1,22 @@
+[package]
+name = "cptv-vlc"
+version = "0.1.0"
+edition = "2021"
+description = "VLC demux plugin for Cacophony Project CPTV thermal video files"
+license = "LGPL-2.1-or-later"
+
+[lib]
+name = "cptv_vlc"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# The upstream CPTV decoder (package "codec" inside the cptv-tools workspace).
+codec = { git = "https://github.com/TheCacophonyProject/cptv-tools", rev = "07e68ff5edf491bfea11cc72f0575358076de125" }
+flate2 = "1.0.33"
+colorous = "1.0.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"
