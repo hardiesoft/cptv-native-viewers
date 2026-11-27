@@ -208,7 +208,7 @@ jobs:
     runs-on: windows-2025
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      VLC_EXE_SHA256: 20ad191348684b470ddc4e05204316f3d8e39655f412b3e392a0eef97639daaf
+      VLC_7Z_SHA256: eb4fd8a28291da73608c733786a09610fea865fbe94113bcb60b91c1ebb8404a
       # Sample clips, from the cptv-tools commit pinned in Cargo.toml.
       FIXTURES: https://raw.githubusercontent.com/TheCacophonyProject/cptv-tools/07e68ff5edf491bfea11cc72f0575358076de125/cptv-codec-rs/tests/fixtures
     defaults:
@@ -233,33 +233,27 @@ jobs:
           Get-ChildItem dist
       - name: Install VLC 3.0.23
         run: |
-          $exe = "$env:RUNNER_TEMP\vlc.exe"
-          # download.videolan.org redirects to a mirror. (get.videolan.org serves its
-          # HTML download page to browser-like clients, PowerShell included.)
-          Invoke-WebRequest https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.exe -OutFile $exe
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
-          if ($hash -ne $env:VLC_EXE_SHA256) {
-            throw "VLC installer checksum mismatch: got $hash for $((Get-Item $exe).Length) bytes"
+          # VideoLAN's portable build (the same pinned archive the build takes the
+          # SDK from), set up as VLC's installer would: in Program Files, with the
+          # registry values the CPTV installer reads. VLC's own NSIS installer
+          # never finished installing on the headless runner.
+          $archive = "$env:RUNNER_TEMP\vlc.7z"
+          Invoke-WebRequest https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.7z -OutFile $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash
+          if ($hash -ne $env:VLC_7Z_SHA256) {
+            throw "VLC archive checksum mismatch: got $hash for $((Get-Item $archive).Length) bytes"
           }
-          $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
-          "VLC installer exited with $($p.ExitCode)"
-          # VLC's NSIS installer can hand over to a copy of itself and exit before
-          # it has finished, so wait for what it writes last: the uninstaller and
-          # the registry key the CPTV installer reads.
+          7z x -y "-o$env:RUNNER_TEMP\vlc" $archive | Out-Null
+          if ($LASTEXITCODE) { throw "7z failed" }
           $dir = "$env:ProgramFiles\VideoLAN\VLC"
-          $deadline = (Get-Date).AddMinutes(5)
-          while (-not ((Test-Path "$dir\vlc.exe") -and (Test-Path "$dir\uninstall.exe") -and
-                       (Test-Path 'HKLM:\Software\VideoLAN\VLC')) -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 2
-          }
-          if (-not (Test-Path "$dir\vlc.exe")) {
-            Get-ChildItem "$env:ProgramFiles", "${env:ProgramFiles(x86)}" -Filter VideoLAN -ErrorAction SilentlyContinue
-            Get-Process | Where-Object { $_.Path -like "$env:TEMP*" -or $_.Name -like 'vlc*' -or $_.Name -like 'Au_*' } |
-              Format-Table Name, Id, Path -AutoSize
-            throw "VLC didn't install to $dir"
-          }
-          Start-Sleep -Seconds 5
-          Get-ItemProperty 'HKLM:\Software\VideoLAN\VLC' | Format-List '(default)', Version, InstallDir
+          New-Item -ItemType Directory "$env:ProgramFiles\VideoLAN" -Force | Out-Null
+          Move-Item "$env:RUNNER_TEMP\vlc\vlc-3.0.23" $dir
+          $key = 'HKLM:\Software\VideoLAN\VLC'
+          New-Item $key -Force | Out-Null
+          Set-ItemProperty $key -Name '(default)' -Value "$dir\vlc.exe"
+          Set-ItemProperty $key -Name InstallDir -Value $dir
+          Set-ItemProperty $key -Name Version -Value '3.0.23'
+          Get-Item "$dir\vlc.exe"
       - name: Install CPTV Native Viewers
         run: |
           $setup = (Get-ChildItem dist\*.exe).FullName

@@ -404,8 +404,9 @@ file, and thumbnails in a real Explorer window.
 - **Fedora** (`fedora:42` container, x86_64): the same with Fedora's VLC (`3_0_0f`) as an
   `.rpm`.
 - **Windows** (x64): `scripts/package-windows.sh build` cross-compiles on `ubuntu-24.04`. A
-  `windows-2025` job then builds the installer with Inno Setup and installs VLC 3.0.23 (pinned
-  checksum) and the installer silently. It checks the file association and `VLC_PLUGIN_PATH`,
+  `windows-2025` job then builds the installer with Inno Setup. It sets up VLC 3.0.23 from
+  VideoLAN's portable build (pinned checksum) the way VLC's installer would: in Program Files,
+  with the same registry entries. Then it runs our installer silently. It checks the file association and `VLC_PLUGIN_PATH`,
   plays samples in a headless VLC, and makes thumbnails both by calling the handler directly
   and through Windows' thumbnail pipeline. Finally it uninstalls and checks nothing is left
   behind. The test thumbnails are kept as a run artifact.
