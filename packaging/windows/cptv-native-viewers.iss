@@ -103,7 +103,16 @@ var
   Version: String;
 begin
   Result := True;
-  if not FileExists(VlcExe('')) then
+  if not FileExists(VlcExe('')) and
+     (RegKeyExists(HKLM32, 'Software\VideoLAN\VLC') or
+      FileExists(ExpandConstant('{commonpf32}\VideoLAN\VLC\vlc.exe'))) then
+    { The plugin is x64, so 32-bit VLC can't load it. }
+    SuppressibleMsgBox('Only the 32-bit version of VLC media player is installed, and ' +
+      'this plugin needs the 64-bit version. Uninstall 32-bit VLC and install the 64-bit ' +
+      'VLC 3 from videolan.org (the "Windows 64bit" download), then run this installer ' +
+      'again to play .cptv files. Explorer thumbnails will work without it.',
+      mbInformation, MB_OK, IDOK)
+  else if not FileExists(VlcExe('')) then
     SuppressibleMsgBox('VLC media player (64-bit) wasn''t found. Install VLC 3 from ' +
       'videolan.org to play .cptv files; Explorer thumbnails will work without it.',
       mbInformation, MB_OK, IDOK)

@@ -100,7 +100,7 @@ header:
   clip is decoded into memory when the file opens (about 38 KB per frame), and seeking is
   instant.
 
-Each frame is drawn as an RV32 picture when it's needed and passed to VLC's `rawvideo`
+Each frame is drawn as a BGRA picture when it's needed and passed to VLC's `rawvideo`
 decoder. If there's a background frame, it's skipped. If a header claims more frames than
 the file holds (for example, a truncated recording), playback simply ends at the last frame
 that decodes.

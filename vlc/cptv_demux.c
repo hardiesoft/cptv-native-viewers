@@ -4,7 +4,7 @@
  * Thin VLC glue around the Rust decoder in src/lib.rs, which reads the file
  * through callbacks on a VLC stream. Clips whose header gives the frame count
  * are decoded on demand (seeking back rewinds and re-decodes); others are
- * decoded into memory on open. Each frame is handed to VLC as a raw RV32
+ * decoded into memory on open. Each frame is handed to VLC as a raw BGRA
  * picture.
  *****************************************************************************/
 
@@ -90,7 +90,7 @@ struct demux_sys_t
     es_out_id_t *es;
     cptv_info   info;
     uint32_t    frame;      /* next frame to send */
-    size_t      frame_size; /* bytes per RV32 picture */
+    size_t      frame_size; /* bytes per BGRA picture */
 };
 
 static vlc_tick_t FrameTime(const demux_sys_t *sys, uint32_t frame)
@@ -281,13 +281,14 @@ static int Open(vlc_object_t *obj)
     sys->frame_size = (size_t)sys->info.width * sys->info.height * 4;
 
     es_format_t fmt;
-    es_format_Init(&fmt, VIDEO_ES, VLC_CODEC_RGB32);
-    video_format_Setup(&fmt.video, VLC_CODEC_RGB32,
+    /* The core writes native-endian 0xAARRGGBB, i.e. bytes B,G,R,A on every
+     * platform we build for. Say so with BGRA rather than RV32 + masks: the
+     * Direct3D11 output (VLC's default on Windows) ignores RV32's masks and
+     * reads the bytes as A,R,G,B, turning viridis bright blue. */
+    es_format_Init(&fmt, VIDEO_ES, VLC_CODEC_BGRA);
+    video_format_Setup(&fmt.video, VLC_CODEC_BGRA,
                        sys->info.width, sys->info.height,
                        sys->info.width, sys->info.height, 1, 1);
-    fmt.video.i_rmask = 0x00ff0000;
-    fmt.video.i_gmask = 0x0000ff00;
-    fmt.video.i_bmask = 0x000000ff;
     vlc_ureduce(&fmt.video.i_frame_rate, &fmt.video.i_frame_rate_base,
                 (uint64_t)(sys->info.fps * 1000.0 + 0.5), 1000, 0);
     fmt.psz_description = strdup("Thermal (CPTV)");

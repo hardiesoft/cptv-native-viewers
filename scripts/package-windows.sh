@@ -58,9 +58,14 @@ prepare() {
 
 # Only system DLLs (and VLC's core, for the plugin) may be imported.
 check_imports() {
-    objdump="${MINGW_CC%gcc*}objdump"
-    command -v "$objdump" >/dev/null || objdump=x86_64-w64-mingw32-objdump
-    bad=$("$objdump" -p "$1" | sed -n 's/^\tDLL Name: //p' | tr 'A-Z' 'a-z' \
+    # Native Windows toolchains (e.g. WinLibs) name it plain "objdump".
+    objdump=
+    for o in "${MINGW_CC%gcc*}objdump" x86_64-w64-mingw32-objdump objdump; do
+        command -v "$o" >/dev/null && { objdump=$o; break; }
+    done
+    [ -n "$objdump" ] || { echo "objdump not found; can't check $1's imports" >&2; exit 1; }
+    imports=$("$objdump" -p "$1") || exit 1
+    bad=$(printf '%s\n' "$imports" | sed -n 's/^\tDLL Name: //p' | tr 'A-Z' 'a-z' \
         | grep -vE '^(kernel32|ntdll|userenv|ws2_32|dbghelp|msvcrt|advapi32|ole32|oleaut32|shell32|shlwapi|user32|gdi32|bcryptprimitives|propsys|combase|api-ms-win-.*|libvlccore)\.dll$' || true)
     [ -z "$bad" ] || { echo "$1 imports unexpected DLLs: $bad" >&2; exit 1; }
 }
