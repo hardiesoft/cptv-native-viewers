@@ -241,8 +241,25 @@ jobs:
           if ($hash -ne $env:VLC_EXE_SHA256) {
             throw "VLC installer checksum mismatch: got $hash for $((Get-Item $exe).Length) bytes"
           }
-          Start-Process $exe -ArgumentList '/S' -Wait
-          Get-Item "$env:ProgramFiles\VideoLAN\VLC\vlc.exe"
+          $p = Start-Process $exe -ArgumentList '/S' -Wait -PassThru
+          "VLC installer exited with $($p.ExitCode)"
+          # VLC's NSIS installer can hand over to a copy of itself and exit before
+          # it has finished, so wait for what it writes last: the uninstaller and
+          # the registry key the CPTV installer reads.
+          $dir = "$env:ProgramFiles\VideoLAN\VLC"
+          $deadline = (Get-Date).AddMinutes(5)
+          while (-not ((Test-Path "$dir\vlc.exe") -and (Test-Path "$dir\uninstall.exe") -and
+                       (Test-Path 'HKLM:\Software\VideoLAN\VLC')) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+          }
+          if (-not (Test-Path "$dir\vlc.exe")) {
+            Get-ChildItem "$env:ProgramFiles", "${env:ProgramFiles(x86)}" -Filter VideoLAN -ErrorAction SilentlyContinue
+            Get-Process | Where-Object { $_.Path -like "$env:TEMP*" -or $_.Name -like 'vlc*' -or $_.Name -like 'Au_*' } |
+              Format-Table Name, Id, Path -AutoSize
+            throw "VLC didn't install to $dir"
+          }
+          Start-Sleep -Seconds 5
+          Get-ItemProperty 'HKLM:\Software\VideoLAN\VLC' | Format-List '(default)', Version, InstallDir
       - name: Install CPTV Native Viewers
         run: |
           $setup = (Get-ChildItem dist\*.exe).FullName
