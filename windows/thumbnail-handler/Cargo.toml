@@ -1,0 +1,40 @@
+# Windows Explorer thumbnail handler for .cptv files (a COM in-process
+# server), plus a small tool for testing it. Windows only; built by
+# scripts/package-windows.sh. A separate crate so its Windows-only
+# dependencies stay out of the main (Linux/macOS) build.
+[package]
+name = "cptv-thumbnail-handler"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[lib]
+name = "cptv_thumbnail_handler"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "cptv-thumbnail-test"
+path = "src/bin/cptv-thumbnail-test.rs"
+
+[dependencies]
+cptv-native-viewers = { path = "../.." }
+windows-core = "0.62"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# COM entry points catch panics so none unwind into Explorer.
+panic = "unwind"

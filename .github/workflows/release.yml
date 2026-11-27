@@ -1,7 +1,8 @@
-# Builds installers for macOS (universal .pkg) and Linux x86_64 (.deb for
-# Ubuntu 24.04+/Debian 13, .rpm for Fedora), testing each one.
+# Builds installers for macOS (universal .pkg), Linux x86_64 (.deb for
+# Ubuntu 24.04+/Debian 13, .rpm for Fedora) and Windows x64 (.exe), testing
+# each one.
 #   - Push a tag like v0.2.0 (matching Cargo.toml's version), or create a
-#     release with that tag on GitHub, and the three files are attached to
+#     release with that tag on GitHub, and the four installers are attached to
 #     the release (created if it doesn't exist yet).
 #   - Run it by hand (Actions > Release > Run workflow) to get the files as
 #     build artifacts without releasing.
@@ -181,9 +182,130 @@ jobs:
           path: dist/*.rpm
           if-no-files-found: error
 
+  # Windows x64: cross-built on Linux with MinGW-w64 (VLC itself is built that
+  # way), then packaged and tested on a real Windows runner.
+  windows-build:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 p7zip-full
+      - name: Build
+        run: ./scripts/package-windows.sh build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            build/windows/*.dll
+            build/windows/*.exe
+          if-no-files-found: error
+
+  windows:
+    needs: [version, windows-build]
+    runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      VLC_EXE_SHA256: 20ad191348684b470ddc4e05204316f3d8e39655f412b3e392a0eef97639daaf
+      # Sample clips, from the cptv-tools commit pinned in Cargo.toml.
+      FIXTURES: https://raw.githubusercontent.com/TheCacophonyProject/cptv-tools/07e68ff5edf491bfea11cc72f0575358076de125/cptv-codec-rs/tests/fixtures
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: build/windows
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc /Q "/DAppVersion=$env:VERSION" "/DBuildDir=$PWD\build\windows" "/DOutDir=$PWD\dist" `
+            packaging\windows\cptv-native-viewers.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+      - name: Install VLC 3.0.23
+        run: |
+          $exe = "$env:RUNNER_TEMP\vlc.exe"
+          Invoke-WebRequest https://get.videolan.org/vlc/3.0.23/win64/vlc-3.0.23-win64.exe -OutFile $exe
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $env:VLC_EXE_SHA256) { throw "VLC installer checksum mismatch" }
+          Start-Process $exe -ArgumentList '/S' -Wait
+          Get-Item "$env:ProgramFiles\VideoLAN\VLC\vlc.exe"
+      - name: Install CPTV Native Viewers
+        run: |
+          $setup = (Get-ChildItem dist\*.exe).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=install.log' -Wait
+          Get-Content install.log -Tail 5
+          $app = "$env:ProgramFiles\CPTV Native Viewers"
+          Get-Item "$app\vlc-plugins\libcptv_plugin.dll", "$app\cptv_thumbnail_handler.dll"
+          cmd /c assoc .cptv
+          cmd /c ftype CPTVNativeViewers.cptv
+          $path = [Environment]::GetEnvironmentVariable('VLC_PLUGIN_PATH', 'Machine')
+          "VLC_PLUGIN_PATH=$path"
+          if ($path -ne "$app\vlc-plugins") { throw "VLC_PLUGIN_PATH not set as expected" }
+      - name: Fetch sample clips
+        run: |
+          New-Item -ItemType Directory samples | Out-Null
+          foreach ($f in '20240507-074536.cptv', '20180603-090916.cptv') {
+            Invoke-WebRequest "$env:FIXTURES/$f" -OutFile "samples\$f"
+          }
+      - name: Play in VLC
+        run: |
+          # Steps don't see machine environment changes, so read the value the
+          # installer wrote, as a newly started Explorer/VLC would.
+          $env:VLC_PLUGIN_PATH = [Environment]::GetEnvironmentVariable('VLC_PLUGIN_PATH', 'Machine')
+          foreach ($f in Get-ChildItem samples\*.cptv) {
+            $log = "$env:RUNNER_TEMP\vlc-$($f.BaseName).log"
+            Start-Process "$env:ProgramFiles\VideoLAN\VLC\vlc.exe" -Wait -ArgumentList `
+              '-I','dummy','--no-audio','--vout=dummy','--play-and-exit','--no-qt-privacy-ask',
+              '--file-logging',"--logfile=$log",'--log-verbose=2', "`"$($f.FullName)`""
+            $hit = Select-String -Path $log -Pattern 'using demux module "cptv"|CPTV:'
+            $hit | ForEach-Object { "$($f.Name): $($_.Line)" }
+            if (-not ($hit | Where-Object Line -match 'using demux module "cptv"')) {
+              Get-Content $log -Tail 40
+              throw "VLC didn't use the cptv demuxer for $($f.Name)"
+            }
+          }
+      - name: Thumbnails
+        run: |
+          $handler = "$env:ProgramFiles\CPTV Native Viewers\cptv_thumbnail_handler.dll"
+          $test = "build\windows\cptv-thumbnail-test.exe"
+          New-Item -ItemType Directory thumbs | Out-Null
+          foreach ($f in Get-ChildItem samples\*.cptv) {
+            # The installed DLL, called directly.
+            & $test direct $handler $f.FullName 256 "thumbs\$($f.BaseName)-direct.bmp"
+            if ($LASTEXITCODE) { throw "direct thumbnail failed for $($f.Name)" }
+            # Windows' own thumbnail pipeline (registration, isolated host process).
+            & $test shell $f.FullName 256 "thumbs\$($f.BaseName)-shell.bmp"
+            if ($LASTEXITCODE) { throw "shell thumbnail failed for $($f.Name)" }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-thumbnails
+          path: thumbs/
+      - name: Uninstall
+        run: |
+          $app = "$env:ProgramFiles\CPTV Native Viewers"
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          if ([Environment]::GetEnvironmentVariable('VLC_PLUGIN_PATH', 'Machine')) { throw "VLC_PLUGIN_PATH left behind" }
+          if (Test-Path 'Registry::HKEY_LOCAL_MACHINE\Software\Classes\CLSID\{FBF13CFA-0D80-4899-926E-C50711CDFA5A}') { throw "handler CLSID left behind" }
+          if (Test-Path 'Registry::HKEY_LOCAL_MACHINE\Software\Classes\CPTVNativeViewers.cptv') { throw "ProgID left behind" }
+          if (Test-Path "$app\vlc-plugins\libcptv_plugin.dll") { throw "plugin left behind" }
+          "Uninstalled cleanly"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [version, macos, linux-deb, linux-rpm]
+    needs: [version, macos, linux-deb, linux-rpm, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

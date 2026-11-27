@@ -14,6 +14,14 @@
 # define __PLUGIN__
 #endif
 
+#ifdef _WIN32
+/* VLC's own build declares poll() in a private header (vlc_fixups.h); the
+ * public vlc_threads.h calls it from an inline function this plugin never
+ * uses, so a declaration is all that's needed. */
+# include <winsock2.h>
+int poll(struct pollfd *fds, unsigned nfds, int timeout);
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 

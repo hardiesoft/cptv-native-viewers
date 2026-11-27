@@ -21,6 +21,7 @@ use codec::decode::CptvHeader;
 
 pub mod palette;
 pub mod source;
+pub mod thumbnail;
 
 use palette::Palette;
 use source::{new_decoder, next_playable, Fetch, FrameSource, Opener, StreamSource};
