@@ -104,7 +104,7 @@ jobs:
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: installer-macos
           path: dist/*.pkg
           if-no-files-found: error
 
@@ -136,7 +136,7 @@ jobs:
           /usr/bin/cptv-thumbnailer -s 128 "$(./scripts/fixtures-dir.sh)/20240507-074536.cptv" "$RUNNER_TEMP/t.png"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-deb
+          name: installer-linux-deb
           path: dist/*.deb
           if-no-files-found: error
 
@@ -178,7 +178,7 @@ jobs:
           /usr/bin/cptv-thumbnailer -s 128 "$fixtures/20240507-074536.cptv" /tmp/t.png
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-rpm
+          name: installer-linux-rpm
           path: dist/*.rpm
           if-no-files-found: error
 
@@ -318,7 +318,7 @@ jobs:
           "Uninstalled cleanly"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
+          name: installer-windows
           path: dist/*.exe
           if-no-files-found: error
 
@@ -329,8 +329,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the installers: the run's other artifacts (Windows build outputs
+      # and test thumbnails) aren't release files.
       - uses: actions/download-artifact@v4
         with:
+          pattern: installer-*
           path: dist
           merge-multiple: true
       # The release may already exist: creating one on GitHub also pushes its
