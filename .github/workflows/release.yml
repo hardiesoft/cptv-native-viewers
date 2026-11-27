@@ -234,8 +234,13 @@ jobs:
       - name: Install VLC 3.0.23
         run: |
           $exe = "$env:RUNNER_TEMP\vlc.exe"
-          Invoke-WebRequest https://get.videolan.org/vlc/3.0.23/win64/vlc-3.0.23-win64.exe -OutFile $exe
-          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $env:VLC_EXE_SHA256) { throw "VLC installer checksum mismatch" }
+          # download.videolan.org redirects to a mirror. (get.videolan.org serves its
+          # HTML download page to browser-like clients, PowerShell included.)
+          Invoke-WebRequest https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.exe -OutFile $exe
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
+          if ($hash -ne $env:VLC_EXE_SHA256) {
+            throw "VLC installer checksum mismatch: got $hash for $((Get-Item $exe).Length) bytes"
+          }
           Start-Process $exe -ArgumentList '/S' -Wait
           Get-Item "$env:ProgramFiles\VideoLAN\VLC\vlc.exe"
       - name: Install CPTV Native Viewers
