@@ -1,14 +1,16 @@
 # cptv-native-viewers
 
 Native desktop support for [Cacophony Project](https://cacophony.org.nz) **CPTV** thermal
-video files on macOS and Linux:
+video files on macOS, Linux and Windows:
 
-- **VLC plugin** (macOS and Linux): double-click a `.cptv` file to watch it in VLC 3.0, with
-  seeking, a choice of colour palettes, and the recording's metadata.
+- **VLC plugin** (macOS, Linux and Windows): double-click a `.cptv` file to watch it in VLC
+  3.0, with seeking, a choice of colour palettes, and the recording's metadata.
 - **Finder thumbnails and spacebar previews** (macOS 13+): Quick Look extensions show a
   thumbnail for each `.cptv` file and play a preview when you press Space.
 - **File-manager thumbnails** (Linux): a freedesktop thumbnailer for GNOME Files, Nemo, Caja
   and Thunar.
+- **Explorer thumbnails** (Windows 10 and 11): a thumbnail handler so File Explorer shows a
+  picture for each `.cptv` file.
 
 ## Install
 
@@ -21,6 +23,7 @@ Download the installer for your system from the
 | macOS 10.15+ (Apple silicon and Intel) | `cptv-native-viewers-<version>-macos.pkg` | VLC plugin; Finder thumbnails and previews on macOS 13+ |
 | Ubuntu 24.04+, Debian 13+ (x86_64) | `cptv-native-viewers_<version>_amd64.deb` | VLC plugin, file-manager thumbnails |
 | Fedora (x86_64) | `cptv-native-viewers-<version>-1.x86_64.rpm` | VLC plugin, file-manager thumbnails |
+| Windows 10/11 (x64) | `cptv-native-viewers-<version>-windows-x64.exe` | VLC plugin, Explorer thumbnails |
 
 **macOS:** double-click the `.pkg` and follow the installer. If macOS says it can't check
 the package for malicious software (releases aren't signed with an Apple Developer ID yet),
@@ -49,8 +52,14 @@ and a "VLC (CPTV thermal video)" entry for opening the files. Remove it with
 work with your distribution's VLC, not the Snap or Flatpak versions, which can't load
 outside plugins.
 
-If double-clicking a `.cptv` file opens something else, right-click it, choose **Open With**,
-pick **VLC** (on Linux, **VLC (CPTV thermal video)**), and make it the default.
+**Windows:** install 64-bit VLC 3 first, then run the `.exe` installer (it needs
+administrator rights). Releases aren't code-signed yet, so Windows SmartScreen may say it
+"protected your PC": click **More info → Run anyway**. Remove it from **Settings → Apps →
+Installed apps → CPTV Native Viewers**. See [Windows](#windows) for what it installs.
+
+If double-clicking a `.cptv` file opens something else, right-click it, choose **Open With**
+(on Windows, **Open with → Choose another app**), pick **VLC** (on Linux, **VLC (CPTV
+thermal video)**), and make it the default.
 
 ## How it works
 
@@ -66,10 +75,14 @@ src/lib.rs         probe, open via read/seek callbacks, normalise + upscale + co
 src/source.rs      frame sources: streaming (decode on demand) or in memory
 src/palette.rs     colour maps (viridis, inferno, magma, plasma, turbo, ironbow, grey)
 tests/common/      tiny CPTV encoder for synthetic test clips
+src/thumbnail.rs   thumbnail drawing shared by the Linux and Windows thumbnailers
 src/bin/           cptv-thumbnailer: freedesktop thumbnailer for Linux file managers
 macos/quicklook/   macOS Quick Look thumbnail + preview extensions (Swift, same Rust core)
-packaging/         macOS installer (pkg/), LaunchAgent, Linux MIME/desktop/thumbnailer files
-scripts/           packaging (package-macos.sh, package-linux.sh) and test helpers
+windows/thumbnail-handler/  Windows Explorer thumbnail handler (COM, Rust) + test tool
+packaging/         macOS installer (pkg/), LaunchAgent, Linux MIME/desktop/thumbnailer files,
+                   Windows installer (windows/, Inno Setup)
+scripts/           packaging (package-macos.sh, package-linux.sh, package-windows.sh) and
+                   test helpers
 .github/workflows/ release builds
 ```
 
@@ -300,9 +313,55 @@ If thumbnails don't appear, run `qlmanage -r cache` and reopen the Finder window
 type was previously registered differently, Quick Look's thumbnail agent can keep using the
 old type until you log out and back in.
 
+## Windows
+
+Everything for Windows is cross-built on Linux with MinGW-w64, the same toolchain VideoLAN
+uses for VLC itself, by `scripts/package-windows.sh`:
+
+```bash
+sudo apt install gcc-mingw-w64-x86-64 p7zip-full   # Debian/Ubuntu
+./scripts/package-windows.sh build                  # → build/windows/*.dll, cptv-thumbnail-test.exe
+./scripts/package-windows.sh installer              # → dist/…-windows-x64.exe (needs Inno Setup's ISCC)
+```
+
+- **VLC plugin** (`libcptv_plugin.dll`): a Windows plugin can't leave VLC's functions
+  unresolved the way the Linux and macOS ones do, so it links against `libvlccore`'s import
+  library. That comes from the plugin SDK inside VideoLAN's own VLC 3.0.23 Windows download,
+  which the script fetches and checks against a pinned SHA-256. It uses VLC's C runtime
+  (`msvcrt.dll`), because the plugin and VLC free each other's strings, and the upstream ABI
+  tag `3_0_0f`. It's linked statically, so it only imports Windows system DLLs and
+  `libvlccore.dll`.
+- **Explorer thumbnails** (`cptv_thumbnail_handler.dll`, in `windows/thumbnail-handler/`): a
+  COM thumbnail handler (`IThumbnailProvider` + `IInitializeWithStream`) written in Rust with
+  the [`windows`](https://crates.io/crates/windows) crate. Explorer runs it in a separate,
+  isolated process and gives it the file as a stream. It draws the same frame as the Linux and
+  macOS thumbnails, using the same code (`src/thumbnail.rs`), and never reads or holds a whole
+  clip. It's a separate crate, so its Windows-only dependencies stay out of the Linux and
+  macOS builds.
+- **Installer** (`packaging/windows/cptv-native-viewers.iss`, [Inno
+  Setup](https://jrsoftware.org/isinfo.php)), per machine:
+  - puts the plugin in `C:\Program Files\CPTV Native Viewers\vlc-plugins\` and adds that
+    folder to a machine-wide `VLC_PLUGIN_PATH`. This is like the macOS LaunchAgent: VLC's own
+    folder isn't touched, so VLC upgrades (which replace VLC's `plugins` folder) don't
+    remove it. An existing `VLC_PLUGIN_PATH` is added to rather than replaced, and
+    uninstalling removes only this entry.
+  - registers the thumbnail handler for `.cptv`
+  - adds a "Cacophony thermal video" file type for `.cptv` that opens in the installed
+    `vlc.exe`, found from VLC's registry entry. It's offered as the default, but Windows 10 and
+    11 don't let installers force a default app, so Windows may ask once which app to use.
+  - warns, but carries on, if 64-bit VLC 3 isn't installed: thumbnails work without it.
+- **Test tool** (`cptv-thumbnail-test.exe`, not shipped): `direct <dll> <file> <size> <out.bmp>`
+  calls the handler DLL the way Explorer does, with no registration (works under Wine).
+  `shell <file> <size> <out.bmp>` asks Windows' own thumbnail pipeline, which only works once
+  the handler is installed and registered.
+
+Only 64-bit Windows is supported: VLC 3 has no official ARM64 Windows build, and 32-bit VLC is
+rare now. Not yet tested by hand on a Windows PC: double-clicking a file, and seeing
+thumbnails in a real Explorer window. The release workflow tests the rest on a Windows runner.
+
 ## Releases
 
-`.github/workflows/release.yml` builds and tests all three installers:
+`.github/workflows/release.yml` builds and tests all four installers:
 
 - **macOS** (`macos-15` runner): `scripts/package-macos.sh` builds the plugin, the Quick Look
   app and a small helper for both arm64 and x86_64, merges them with `lipo`, and wraps them in
@@ -313,6 +372,12 @@ old type until you log out and back in.
   installs the `.deb` and checks that VLC plays a sample with it.
 - **Fedora** (`fedora:42` container, x86_64): the same with Fedora's VLC (`3_0_0f`) as an
   `.rpm`.
+- **Windows** (x64): `scripts/package-windows.sh build` cross-compiles on `ubuntu-24.04`. A
+  `windows-2025` job then builds the installer with Inno Setup and installs VLC 3.0.23 (pinned
+  checksum) and the installer silently. It checks the file association and `VLC_PLUGIN_PATH`,
+  plays samples in a headless VLC, and makes thumbnails both by calling the handler directly
+  and through Windows' thumbnail pipeline. Finally it uninstalls and checks nothing is left
+  behind. The test thumbnails are kept as a run artifact.
 
 To publish a release, set `version` in `Cargo.toml`, commit, and push a matching tag:
 
@@ -324,7 +389,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow then creates a GitHub Release with the three files. You can also create the
+The workflow then creates a GitHub Release with the four files. You can also create the
 release on GitHub first (**Releases → Draft a new release**, with a new `v…` tag): the
 workflow then attaches the files to it and keeps your title and notes. If you re-run the
 workflow for a tag, it replaces the release's files. Running it by hand
