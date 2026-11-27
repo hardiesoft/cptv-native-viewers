@@ -386,9 +386,12 @@ Under Wine 10 on Linux, with VideoLAN's own VLC 3.0.23 for Windows:
   upstream samples and long and short old-format clips. They're pixel-identical to the Linux
   thumbnailer's, and broken files fail cleanly.
 
-Wine's shell doesn't call thumbnail handlers, so that part (`cptv-thumbnail-test shell`) is
-left to the release workflow's Windows runner. Not yet tried on a Windows PC: double-clicking a
-file, and thumbnails in a real Explorer window.
+On Windows Server 2025, in the release workflow: the installer installs, VLC plays both
+samples with the plugin, and uninstalling leaves nothing behind. Thumbnails made through
+Windows' own pipeline (`cptv-thumbnail-test shell`: registration, Explorer's isolated host
+process, the handler) are pixel-identical to the Linux thumbnailer's. Wine's shell can't test
+that part, because it doesn't call thumbnail handlers. Not yet tried on a Windows PC:
+double-clicking a file, and thumbnails in a real Explorer window.
 
 ## Releases
 
