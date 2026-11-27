@@ -15,7 +15,9 @@
 # Environment (all optional):
 #   VERSION     installer version (default: Cargo.toml's)
 #   MINGW_CC    C compiler (default: x86_64-w64-mingw32-gcc)
-#   ISCC        Inno Setup compiler command (default: iscc, if on PATH)
+#   ISCC        Inno Setup compiler command (default: iscc). Under Wine, e.g.
+#               ISCC="wine /path/to/ISCC.exe" (the command is split on spaces,
+#               so link the "Inno Setup 6" folder somewhere without them).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -98,11 +100,16 @@ thumbnailer() {
 
 installer() {
     iscc="${ISCC:-iscc}"
-    command -v "$iscc" >/dev/null 2>&1 || {
+    # shellcheck disable=SC2086
+    set -- $iscc
+    command -v "$1" >/dev/null 2>&1 || {
         echo "Inno Setup compiler ($iscc) not found; set ISCC" >&2; exit 1; }
     mkdir -p dist
-    "$iscc" /Q "/DAppVersion=$VERSION" "/DBuildDir=$ROOT/$OUT" "/DOutDir=$ROOT/dist" \
-        packaging/windows/cptv-native-viewers.iss
+    # Under Wine, ISCC needs Windows paths (Z:\...).
+    winpath() { if [ "$(basename "$1")" = wine ]; then winepath -w "$2"; else echo "$2"; fi; }
+    "$@" /Q "/DAppVersion=$VERSION" \
+        "/DBuildDir=$(winpath "$1" "$ROOT/$OUT")" "/DOutDir=$(winpath "$1" "$ROOT/dist")" \
+        "$(winpath "$1" "$ROOT/packaging/windows/cptv-native-viewers.iss")"
     echo "Built dist/cptv-native-viewers-$VERSION-windows-x64.exe"
 }
 

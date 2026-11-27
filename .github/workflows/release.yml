@@ -222,8 +222,11 @@ jobs:
           path: build/windows
       - name: Build installer
         run: |
-          choco install innosetup -y --no-progress | Out-Null
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          # The runner image may already have Inno Setup 6; install it if not.
+          $places = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          if (-not ($places | Where-Object { Test-Path $_ })) { choco install innosetup -y --no-progress | Out-Null }
+          $iscc = $places | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found" }
           & $iscc /Q "/DAppVersion=$env:VERSION" "/DBuildDir=$PWD\build\windows" "/DOutDir=$PWD\dist" `
             packaging\windows\cptv-native-viewers.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

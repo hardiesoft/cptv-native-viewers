@@ -71,6 +71,9 @@ Root: HKLM; Subkey: "Software\Classes\{#ProgId}\shell\open\command"; ValueType: 
 Root: HKLM; Subkey: "Software\Classes\CLSID\{#ThumbClsid}"; ValueType: string; ValueName: ""; ValueData: "CPTV Thumbnail Handler"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\CLSID\{#ThumbClsid}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\cptv_thumbnail_handler.dll"
 Root: HKLM; Subkey: "Software\Classes\CLSID\{#ThumbClsid}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"
+; Uninstall runs in reverse order: the slot goes first, then this empty
+; ShellEx key, then .cptv itself (above) once it's empty.
+Root: HKLM; Subkey: "Software\Classes\.cptv\ShellEx"; Flags: uninsdeletekeyifempty
 Root: HKLM; Subkey: "Software\Classes\.cptv\ShellEx\{#ThumbSlot}"; ValueType: string; ValueName: ""; ValueData: "{#ThumbClsid}"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"; ValueType: string; ValueName: "{#ThumbClsid}"; ValueData: "CPTV Thumbnail Handler"; Flags: uninsdeletevalue
 

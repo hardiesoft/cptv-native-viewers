@@ -115,8 +115,10 @@ impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
 /// Draw the thumbnail into a new top-down 32-bit DIB section.
 fn render_bitmap(stream: IStream, cx: u32) -> windows::core::Result<HBITMAP> {
     let size = cx.clamp(1, MAX_SIZE) as usize;
+    // A plain HRESULT: Explorer never shows the message, and attaching one
+    // calls RoOriginateErrorW, which Wine doesn't implement.
     let thumb = thumbnail::render(stream_opener(stream), size, Palette::default())
-        .map_err(|e| windows::core::Error::new(E_FAIL, e))?;
+        .map_err(|_| windows::core::Error::from(E_FAIL))?;
     let (w, h) = (thumb.width, thumb.height);
 
     let info = BITMAPINFO {

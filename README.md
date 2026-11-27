@@ -324,6 +324,14 @@ sudo apt install gcc-mingw-w64-x86-64 p7zip-full   # Debian/Ubuntu
 ./scripts/package-windows.sh installer              # → dist/…-windows-x64.exe (needs Inno Setup's ISCC)
 ```
 
+On Linux, the installer can be built with Inno Setup 6 running under Wine. The `ISCC` command
+is split on spaces, so link the `Inno Setup 6` folder somewhere without them:
+
+```bash
+ln -s ~/.wine/drive_c/users/$USER/AppData/Local/Programs/"Inno Setup 6" ~/inno6
+ISCC="wine $HOME/inno6/ISCC.exe" ./scripts/package-windows.sh installer
+```
+
 - **VLC plugin** (`libcptv_plugin.dll`): a Windows plugin can't leave VLC's functions
   unresolved the way the Linux and macOS ones do, so it links against `libvlccore`'s import
   library. That comes from the plugin SDK inside VideoLAN's own VLC 3.0.23 Windows download,
@@ -356,8 +364,31 @@ sudo apt install gcc-mingw-w64-x86-64 p7zip-full   # Debian/Ubuntu
   the handler is installed and registered.
 
 Only 64-bit Windows is supported: VLC 3 has no official ARM64 Windows build, and 32-bit VLC is
-rare now. Not yet tested by hand on a Windows PC: double-clicking a file, and seeing
-thumbnails in a real Explorer window. The release workflow tests the rest on a Windows runner.
+rare now.
+
+#### What's been tested on Windows
+
+Under Wine 10 on Linux, with VideoLAN's own VLC 3.0.23 for Windows:
+
+- **Playback:** with the plugin on `VLC_PLUGIN_PATH`, VLC uses the `cptv` demuxer for the
+  2018 v1 file and the 2024 TC2 file (streamed). Its frames are pixel-identical to the Linux
+  plugin's, and a seek to 20 s lands on frame 180, as it should.
+- **Installer:**
+  - It installs silently and writes the file type, handler registration and
+    `VLC_PLUGIN_PATH` as intended.
+  - A VLC started afterwards, with nothing else set, picks the plugin up from the machine
+    environment.
+  - An existing `VLC_PLUGIN_PATH` is extended once, not duplicated on reinstall, and
+    restored on uninstall.
+  - Uninstalling removes everything else.
+  - Without VLC installed, it warns and still installs.
+- **Thumbnail handler:** called the way Explorer calls it, it draws thumbnails for the
+  upstream samples and long and short old-format clips. They're pixel-identical to the Linux
+  thumbnailer's, and broken files fail cleanly.
+
+Wine's shell doesn't call thumbnail handlers, so that part (`cptv-thumbnail-test shell`) is
+left to the release workflow's Windows runner. Not yet tried on a Windows PC: double-clicking a
+file, and thumbnails in a real Explorer window.
 
 ## Releases
 
